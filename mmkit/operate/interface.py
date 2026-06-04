@@ -12,6 +12,7 @@ This prevents molecules from being cut by the slab boundaries.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -24,6 +25,21 @@ from pymatgen.io.ase import AseAtomsAdaptor
 
 from mmkit.core.structure import Structure
 from mmkit.core.tool import Operation
+
+
+# ---------------------------------------------------------------------------
+# Data model
+# ---------------------------------------------------------------------------
+
+@dataclass
+class InterfaceTermination:
+    """A single interface termination pair (film + substrate)."""
+
+    index: int
+    film_label: str
+    substrate_label: str
+    film_shift: float
+    substrate_shift: float
 
 
 # ---------------------------------------------------------------------------
@@ -149,11 +165,17 @@ def _wrap_molecules(
     mol_ids: List[int],
     lattice: PmgLattice,
 ) -> List[np.ndarray]:
-    """Wrap atoms to [0, 1) while keeping molecules intact.
+    """Wrap atoms in-plane while keeping molecules intact.
 
-    For atoms with mol_id >= 0 (molecules), wrap the molecule center and
+    For atoms with mol_id >= 0 (molecules), wrap the molecule center (x/y) and
     shift all atoms in the molecule by the same amount.
-    For atoms with mol_id < 0 (inorganic), wrap individually.
+    For atoms with mol_id < 0 (inorganic), wrap individually in x/y.
+
+    Notes
+    -----
+    Interfaces are slab-like with vacuum along z. Wrapping z per-atom can
+    split one slab across the periodic boundary and place a few film atoms
+    near the substrate side. We therefore wrap only the in-plane axes.
 
     Parameters
     ----------
@@ -172,7 +194,8 @@ def _wrap_molecules(
     M_inv = np.linalg.inv(M)
 
     # Convert to fractional
-    frac_coords = [M_inv @ c for c in cart_coords]
+    # mmkit uses row-vector convention: cart = frac @ lattice.
+    frac_coords = [c @ M_inv for c in cart_coords]
 
     # Group by molecule ID
     mol_groups = {}
@@ -182,31 +205,33 @@ def _wrap_molecules(
                 mol_groups[mid] = []
             mol_groups[mid].append(i)
 
-    # Wrap each molecule by its center
+    # Wrap each molecule by its center (x/y only)
     for mid, indices in mol_groups.items():
         # Compute PBC-aware center of this molecule
         mfracs = np.array([frac_coords[i] for i in indices])
         ref = mfracs[0]
-        for j in range(3):
+        for j in (0, 1):
             diff = mfracs[:, j] - ref[j]
             mfracs[:, j] = ref[j] + (diff + 0.5) % 1.0 - 0.5
         center = mfracs.mean(axis=0)
 
-        # Wrap center to [0, 1)
+        # Wrap center to [0, 1) in-plane only
         wrapped_center = center % 1.0
+        wrapped_center[2] = center[2]
         shift = wrapped_center - center
 
         # Apply shift to all atoms in molecule
         for i in indices:
             frac_coords[i] = frac_coords[i] + shift
 
-    # Wrap inorganic atoms individually
+    # Wrap inorganic atoms individually (x/y only)
     for i, mid in enumerate(mol_ids):
         if mid < 0:
-            frac_coords[i] = frac_coords[i] % 1.0
+            frac_coords[i][0] = frac_coords[i][0] % 1.0
+            frac_coords[i][1] = frac_coords[i][1] % 1.0
 
     # Convert back to Cartesian
-    return [M @ f for f in frac_coords]
+    return [f @ M for f in frac_coords]
 
 
 def _recover_molecules(
@@ -277,10 +302,16 @@ def _recover_molecules(
         center_cart = interface.lattice.get_cartesian_coords(f_iface)
 
         for d, sp in zip(best_template["offsets"], best_template["species"]):
-            rd = R @ d
+            # Film z-flip must happen in the bulk frame BEFORE rotation.
+            # Pymatgen inverts film z-coords (1-z) in the bulk frame; the
+            # lattice transformation (deformation gradient F = R @ U) then
+            # maps the flipped offsets into the interface frame.  Flipping
+            # after R is wrong whenever R has off-diagonal elements that
+            # mix z with x/y (i.e. most non-trivial Miller-index combos).
+            d_work = d.copy()
             if is_film:
-                rd = rd.copy()
-                rd[2] *= -1.0  # film z-flip
+                d_work[2] *= -1.0
+            rd = R @ d_work
             atom_cart = center_cart + rd
             all_species.append(sp)
             all_cart.append(atom_cart)
@@ -341,11 +372,13 @@ def _recalculate_gap(
             c[2] += shift_z
         new_cart.append(c)
 
-    # Expand lattice c-vector to accommodate the shift
+    # Expand lattice c-vector to accommodate the shift.
+    # Only increase the z-component of c so the in-plane lattice is
+    # undisturbed (the c-vector from CoherentInterfaceBuilder is along z,
+    # but rescaling the full direction would also alter cx/cy if non-zero).
     M = np.array(lattice.matrix)
-    new_c_length = lattice.c + shift_z
     new_c = M[2].copy()
-    new_c = new_c / np.linalg.norm(new_c) * new_c_length
+    new_c[2] += shift_z
     new_lattice = PmgLattice([M[0], M[1], new_c])
 
     return new_cart, new_lattice
@@ -374,6 +407,178 @@ class InterfaceBuilder(Operation):
     ... )
     """
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _prepare_bulk(
+        bulk_pmg: PmgStructure,
+        preserve_molecules: bool,
+        mol_tol: float,
+        mol_min_size: int,
+    ) -> Tuple[PmgStructure, List[List[int]], List[Dict]]:
+        """Detect molecules and build pseudo-structure if needed.
+
+        Returns
+        -------
+        (build_pmg, molecules, templates)
+            ``build_pmg`` is the pseudo-atom structure (or original if no
+            molecules found).  ``molecules`` and ``templates`` are empty
+            lists when no molecules are detected.
+        """
+        molecules: List[List[int]] = []
+        templates: List[Dict] = []
+
+        if preserve_molecules:
+            from mmkit.operate.surface import MoleculeDetector
+
+            detector = MoleculeDetector(tol=mol_tol, min_size=mol_min_size)
+            molecules = detector.detect(bulk_pmg)
+            if molecules:
+                templates = _build_mol_templates(bulk_pmg, molecules)
+
+        if molecules:
+            build_pmg = _create_pseudo_structure(bulk_pmg, molecules, templates)
+        else:
+            build_pmg = bulk_pmg
+
+        return build_pmg, molecules, templates
+
+    @staticmethod
+    def _find_zsl_match(
+        build_film: PmgStructure,
+        build_sub: PmgStructure,
+        miller_film: Tuple[int, int, int],
+        miller_substrate: Tuple[int, int, int],
+        max_area: Optional[float],
+        max_length_tol: float,
+        max_angle_tol: float,
+    ):
+        """Run SubstrateAnalyzer and return the best match + analyzer."""
+        analyzer = SubstrateAnalyzer(
+            max_area_ratio_tol=0.09,
+            max_area=max_area,
+            max_length_tol=max_length_tol,
+            max_angle_tol=max_angle_tol,
+        )
+        matches = list(analyzer.calculate(
+            film=build_film,
+            substrate=build_sub,
+            film_millers=[miller_film],
+            substrate_millers=[miller_substrate],
+        ))
+        if not matches:
+            raise ValueError(
+                "No lattice matches found. Try adjusting tolerances or Miller indices."
+            )
+        match = sorted(matches, key=lambda m: m.von_mises_strain)[0]
+        return match, analyzer
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def list_terminations(
+        self,
+        *,
+        film: Union[Atoms, PmgStructure, Structure],
+        substrate: Union[Atoms, PmgStructure, Structure],
+        miller_film: Tuple[int, int, int] = (1, 0, 0),
+        miller_substrate: Tuple[int, int, int] = (1, 1, 1),
+        max_area: Optional[float] = 400.0,
+        max_length_tol: float = 0.03,
+        max_angle_tol: float = 0.01,
+        termination_ftol: Union[float, Tuple[float, float]] = 0.25,
+        label_index: bool = False,
+        filter_out_sym_slabs: bool = True,
+        preserve_molecules: bool = True,
+        mol_tol: float = 0.45,
+        mol_min_size: int = 2,
+    ) -> dict:
+        """Discover all interface terminations for a film/substrate pair.
+
+        Parameters
+        ----------
+        film, substrate
+            The film and substrate bulk structures.
+        miller_film, miller_substrate
+            Miller indices of the surfaces to expose.
+        max_area
+            Maximum supercell area for ZSL search (A^2).
+        max_length_tol, max_angle_tol
+            ZSL matching tolerances.
+        termination_ftol
+            Tolerance for distinguishing termination planes (A).
+            A tuple sets (film_ftol, substrate_ftol) independently.
+        label_index
+            If ``True``, prefix termination labels with an index to
+            disambiguate labels that would otherwise be identical.
+        filter_out_sym_slabs
+            If ``True``, filter out symmetrically equivalent slabs.
+        preserve_molecules
+            If ``True``, detect molecules and use pseudo-atom approach.
+        mol_tol
+            Bond-detection tolerance for molecule detection (A).
+        mol_min_size
+            Minimum atoms to count as a molecule.
+
+        Returns
+        -------
+        dict
+            Keys: ``film_formula``, ``substrate_formula``, ``film_miller``,
+            ``substrate_miller``, ``von_mises_strain``, ``match_area``,
+            ``terminations`` (list of :class:`InterfaceTermination`).
+        """
+        film_pmg = self._to_pymatgen(film)
+        substrate_pmg = self._to_pymatgen(substrate)
+
+        build_film, _, _ = self._prepare_bulk(
+            film_pmg, preserve_molecules, mol_tol, mol_min_size,
+        )
+        build_sub, _, _ = self._prepare_bulk(
+            substrate_pmg, preserve_molecules, mol_tol, mol_min_size,
+        )
+
+        match, analyzer = self._find_zsl_match(
+            build_film, build_sub,
+            miller_film, miller_substrate,
+            max_area, max_length_tol, max_angle_tol,
+        )
+
+        cib = CoherentInterfaceBuilder(
+            film_structure=build_film,
+            substrate_structure=build_sub,
+            film_miller=match.film_miller,
+            substrate_miller=match.substrate_miller,
+            zslgen=analyzer,
+            termination_ftol=termination_ftol,
+            label_index=label_index,
+            filter_out_sym_slabs=filter_out_sym_slabs,
+        )
+
+        terminations: List[InterfaceTermination] = []
+        for i, (pair, shifts) in enumerate(cib._terminations.items()):
+            film_label, sub_label = pair
+            film_shift, sub_shift = shifts
+            terminations.append(InterfaceTermination(
+                index=i,
+                film_label=film_label,
+                substrate_label=sub_label,
+                film_shift=film_shift,
+                substrate_shift=sub_shift,
+            ))
+
+        return {
+            "film_formula": film_pmg.composition.formula,
+            "substrate_formula": substrate_pmg.composition.formula,
+            "film_miller": match.film_miller,
+            "substrate_miller": match.substrate_miller,
+            "von_mises_strain": match.von_mises_strain,
+            "match_area": match.match_area,
+            "terminations": terminations,
+        }
+
     def apply(
         self,
         *,
@@ -382,6 +587,8 @@ class InterfaceBuilder(Operation):
         miller_film: Tuple[int, int, int] = (1, 0, 0),
         miller_substrate: Tuple[int, int, int] = (1, 1, 1),
         termination=0,
+        termination_film: Optional[Union[int, str]] = None,
+        termination_substrate: Optional[Union[int, str]] = None,
         max_area: Optional[float] = 400.0,
         max_length_tol: float = 0.03,
         max_angle_tol: float = 0.01,
@@ -404,9 +611,17 @@ class InterfaceBuilder(Operation):
         miller_film, miller_substrate
             Miller indices of the surfaces to expose.
         termination
-            Which termination to use.  An integer selects by index, a string
-            matches by label, ``"all"`` returns all terminations (first one
-            is used for now).
+            Which termination to use (backward-compatible).  An integer
+            selects by index from the pair list, a string matches by label
+            substring, ``"all"`` uses the first termination.  Ignored when
+            ``termination_film`` or ``termination_substrate`` is given.
+        termination_film
+            Select the film termination independently.  An integer indexes
+            into unique film labels, a string matches by substring.
+            ``None`` means "match any".
+        termination_substrate
+            Select the substrate termination independently.  Same semantics
+            as ``termination_film``.
         max_area
             Maximum supercell area for ZSL search (A^2).
         max_length_tol, max_angle_tol
@@ -429,56 +644,20 @@ class InterfaceBuilder(Operation):
         film_pmg = self._to_pymatgen(film)
         substrate_pmg = self._to_pymatgen(substrate)
 
-        # ---- Molecule detection ------------------------------------------
-        film_molecules: List[List[int]] = []
-        sub_molecules: List[List[int]] = []
-        film_templates: List[Dict] = []
-        sub_templates: List[Dict] = []
-
-        if preserve_molecules:
-            from mmkit.operate.surface import MoleculeDetector
-
-            detector = MoleculeDetector(tol=mol_tol, min_size=mol_min_size)
-            film_molecules = detector.detect(film_pmg)
-            sub_molecules = detector.detect(substrate_pmg)
-
-            if film_molecules:
-                film_templates = _build_mol_templates(film_pmg, film_molecules)
-            if sub_molecules:
-                sub_templates = _build_mol_templates(substrate_pmg, sub_molecules)
-
-        # ---- Choose structures for interface builder ---------------------
-        if preserve_molecules and (film_molecules or sub_molecules):
-            build_film = (
-                _create_pseudo_structure(film_pmg, film_molecules, film_templates)
-                if film_molecules else film_pmg
-            )
-            build_sub = (
-                _create_pseudo_structure(substrate_pmg, sub_molecules, sub_templates)
-                if sub_molecules else substrate_pmg
-            )
-        else:
-            build_film = film_pmg
-            build_sub = substrate_pmg
+        # ---- Molecule detection + pseudo-atom replacement ---------------
+        build_film, film_molecules, film_templates = self._prepare_bulk(
+            film_pmg, preserve_molecules, mol_tol, mol_min_size,
+        )
+        build_sub, sub_molecules, sub_templates = self._prepare_bulk(
+            substrate_pmg, preserve_molecules, mol_tol, mol_min_size,
+        )
 
         # ---- ZSL matching ------------------------------------------------
-        analyzer = SubstrateAnalyzer(
-            max_area_ratio_tol=0.09,
-            max_area=max_area,
-            max_length_tol=max_length_tol,
-            max_angle_tol=max_angle_tol,
+        match, analyzer = self._find_zsl_match(
+            build_film, build_sub,
+            miller_film, miller_substrate,
+            max_area, max_length_tol, max_angle_tol,
         )
-        matches = list(analyzer.calculate(
-            film=build_film,
-            substrate=build_sub,
-            film_millers=[miller_film],
-            substrate_millers=[miller_substrate],
-        ))
-        if not matches:
-            raise ValueError(
-                "No lattice matches found. Try adjusting tolerances or Miller indices."
-            )
-        match = sorted(matches, key=lambda m: m.von_mises_strain)[0]
 
         # ---- Interface construction --------------------------------------
         builder = CoherentInterfaceBuilder(
@@ -492,7 +671,13 @@ class InterfaceBuilder(Operation):
         if not all_terms:
             raise ValueError("No terminations available for the selected slabs.")
 
-        selected = self._select_termination(all_terms, termination)
+        # Select termination — independent flags take priority
+        if termination_film is not None or termination_substrate is not None:
+            selected = self._resolve_termination_pair(
+                all_terms, termination_film, termination_substrate,
+            )
+        else:
+            selected = self._select_termination(all_terms, termination)
 
         effective_vacuum = vacuum_between if vacuum_between != 0 else gap
         interfaces = list(builder.get_interfaces(
@@ -602,9 +787,14 @@ class InterfaceBuilder(Operation):
                 interface.lattice, gap,
             )
 
+            # Re-wrap with the updated lattice so fractional coords stay
+            # inside [0, 1) — gap recalculation may shift molecules past
+            # the original cell boundary.
+            all_cart = _wrap_molecules(all_cart, all_mol_ids, new_lattice)
+
             # Convert Cartesian to fractional for final structure
             M_inv = np.linalg.inv(new_lattice.matrix)
-            all_frac = [M_inv @ c for c in all_cart]
+            all_frac = [c @ M_inv for c in all_cart]
 
             interface = PmgStructure(
                 new_lattice, all_species, all_frac,
@@ -618,9 +808,13 @@ class InterfaceBuilder(Operation):
 
         return interface
 
+    # ------------------------------------------------------------------
+    # Termination selection
+    # ------------------------------------------------------------------
+
     @staticmethod
     def _select_termination(terminations, selection):
-        """Select a termination by index, label, or 'all'."""
+        """Select a termination pair by index, label substring, or 'all'."""
         if isinstance(selection, str) and selection.lower() == "all":
             return terminations[0]  # use first for now
 
@@ -643,6 +837,67 @@ class InterfaceBuilder(Operation):
         )
 
     @staticmethod
+    def _resolve_termination_pair(
+        terminations: List[Tuple[str, str]],
+        film_selection: Optional[Union[int, str]] = None,
+        substrate_selection: Optional[Union[int, str]] = None,
+    ) -> Tuple[str, str]:
+        """Resolve independent film/substrate selections to a termination pair.
+
+        Parameters
+        ----------
+        terminations
+            Full list of ``(film_label, sub_label)`` pairs.
+        film_selection
+            Index into unique film labels, or label substring.
+            ``None`` matches any film termination.
+        substrate_selection
+            Index into unique substrate labels, or label substring.
+            ``None`` matches any substrate termination.
+
+        Returns
+        -------
+        The matching ``(film_label, sub_label)`` pair.
+        """
+        # Ordered unique labels (preserves first-seen order)
+        film_labels = list(dict.fromkeys(t[0] for t in terminations))
+        sub_labels = list(dict.fromkeys(t[1] for t in terminations))
+
+        def _resolve_one(selection, labels, kind):
+            if selection is None:
+                return None  # wildcard
+            if isinstance(selection, int):
+                if 0 <= selection < len(labels):
+                    return labels[selection]
+                raise ValueError(
+                    f"{kind} index {selection} out of range "
+                    f"[0, {len(labels) - 1}]. "
+                    f"Available {kind.lower()} terminations: {labels}"
+                )
+            sel_str = str(selection)
+            matched = [l for l in labels if sel_str in l]
+            if matched:
+                return matched[0]
+            raise ValueError(
+                f"No {kind.lower()} termination matching '{sel_str}'. "
+                f"Available: {labels}"
+            )
+
+        film_target = _resolve_one(film_selection, film_labels, "Film")
+        sub_target = _resolve_one(substrate_selection, sub_labels, "Substrate")
+
+        for pair in terminations:
+            if (film_target is None or pair[0] == film_target) and \
+               (sub_target is None or pair[1] == sub_target):
+                return pair
+
+        raise ValueError(
+            f"No termination pair found for film={film_target!r}, "
+            f"substrate={sub_target!r}. "
+            f"Available pairs: {terminations}"
+        )
+
+    @staticmethod
     def _to_pymatgen(obj: Union[Atoms, PmgStructure, Structure]) -> PmgStructure:
         """Coerce various structure types to pymatgen Structure."""
         if isinstance(obj, PmgStructure):
@@ -661,6 +916,140 @@ class InterfaceBuilder(Operation):
 # CLI
 # ---------------------------------------------------------------------------
 
+def _add_interface_common_args(p) -> None:
+    """Shared argument definitions for interface CLI commands."""
+    p.add_argument("film", help="Film bulk structure file")
+    p.add_argument("substrate", help="Substrate bulk structure file")
+    p.add_argument(
+        "--miller-film", type=int, nargs=3, default=[1, 0, 0],
+        help="Film surface Miller indices (h k l)",
+    )
+    p.add_argument(
+        "--miller-substrate", type=int, nargs=3, default=[1, 1, 1],
+        help="Substrate surface Miller indices (h k l)",
+    )
+    p.add_argument(
+        "--max-area", type=float, default=400.0,
+        help="Max supercell area for ZSL search (A^2)",
+    )
+    p.add_argument(
+        "--max-length-tol", type=float, default=0.03,
+        help="Max length tolerance for ZSL matching",
+    )
+    p.add_argument(
+        "--max-angle-tol", type=float, default=0.01,
+        help="Max angle tolerance for ZSL matching",
+    )
+    p.add_argument(
+        "--no-preserve-molecules", action="store_true",
+        help="Disable molecule preservation (use raw structures)",
+    )
+    p.add_argument(
+        "--mol-tol", type=float, default=0.45,
+        help="Bond detection tolerance for molecules (A)",
+    )
+    p.add_argument(
+        "--mol-min-size", type=int, default=2,
+        help="Min atoms to count as a molecule",
+    )
+
+
+def _parse_termination_value(value):
+    """Try to parse a termination CLI value as int, falling back to string."""
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
+def _cmd_list(args) -> None:
+    """CLI handler: list all interface terminations."""
+    import json
+
+    from mmkit.io.reader import read_structure
+
+    film = read_structure(args.film)
+    substrate = read_structure(args.substrate)
+
+    builder = InterfaceBuilder()
+    result = builder.list_terminations(
+        film=film,
+        substrate=substrate,
+        miller_film=tuple(args.miller_film),
+        miller_substrate=tuple(args.miller_substrate),
+        max_area=args.max_area,
+        max_length_tol=args.max_length_tol,
+        max_angle_tol=args.max_angle_tol,
+        termination_ftol=args.termination_ftol,
+        preserve_molecules=not args.no_preserve_molecules,
+        mol_tol=args.mol_tol,
+        mol_min_size=args.mol_min_size,
+    )
+
+    # Print header
+    print(f"Film: {args.film}")
+    print(f"  Formula: {result['film_formula']}")
+    print(f"  Miller: ({' '.join(str(x) for x in result['film_miller'])})")
+    print()
+    print(f"Substrate: {args.substrate}")
+    print(f"  Formula: {result['substrate_formula']}")
+    print(f"  Miller: ({' '.join(str(x) for x in result['substrate_miller'])})")
+    print()
+    print("ZSL Match:")
+    print(f"  von Mises strain: {result['von_mises_strain']:.6f}")
+    print(f"  Match area: {result['match_area']:.2f} A^2")
+    print()
+
+    terms = result["terminations"]
+    if not terms:
+        print("No terminations found.")
+        return
+
+    film_labels = list(dict.fromkeys(t.film_label for t in terms))
+    sub_labels = list(dict.fromkeys(t.substrate_label for t in terms))
+
+    print(f"Found {len(terms)} termination(s):\n")
+
+    # Table
+    hdr = (
+        f"  {'#':<4} {'Film Label':<24} {'Substrate Label':<24} "
+        f"{'Film Shift':>11} {'Sub Shift':>10}"
+    )
+    print(hdr)
+    print(f"  {'-' * 4} {'-' * 24} {'-' * 24} {'-' * 11} {'-' * 10}")
+
+    for t in terms:
+        print(
+            f"  {t.index:<4} {t.film_label:<24} {t.substrate_label:<24} "
+            f"{t.film_shift:>11.4f} {t.substrate_shift:>10.4f}"
+        )
+
+    # Unique labels summary
+    print()
+    print(f"  Unique film terminations ({len(film_labels)}): "
+          f"{', '.join(film_labels)}")
+    print(f"  Unique substrate terminations ({len(sub_labels)}): "
+          f"{', '.join(sub_labels)}")
+
+    # Optional JSON output
+    if args.json:
+        out = [
+            {
+                "index": t.index,
+                "film_label": t.film_label,
+                "substrate_label": t.substrate_label,
+                "film_shift": t.film_shift,
+                "substrate_shift": t.substrate_shift,
+            }
+            for t in terms
+        ]
+        with open(args.json, "w") as f:
+            json.dump(out, f, indent=2)
+        print(f"\nJSON saved to {args.json}")
+
+
 def _cmd_build(args):
     """CLI handler: build a coherent interface."""
     from pathlib import Path
@@ -671,6 +1060,13 @@ def _cmd_build(args):
     film_atoms = read_structure(args.film)
     substrate_atoms = read_structure(args.substrate)
 
+    term_film = _parse_termination_value(
+        getattr(args, "termination_film", None)
+    )
+    term_sub = _parse_termination_value(
+        getattr(args, "termination_substrate", None)
+    )
+
     builder = InterfaceBuilder()
     interface = builder.apply(
         film=film_atoms,
@@ -678,6 +1074,8 @@ def _cmd_build(args):
         miller_film=tuple(args.miller_film),
         miller_substrate=tuple(args.miller_substrate),
         termination=args.termination,
+        termination_film=term_film,
+        termination_substrate=term_sub,
         max_area=args.max_area,
         max_length_tol=args.max_length_tol,
         max_angle_tol=args.max_angle_tol,
@@ -707,33 +1105,34 @@ def register_cli(subparsers) -> None:
     interface = subparsers.add_parser("interface", help="Build coherent interfaces")
     iface_sub = interface.add_subparsers(dest="action", required=True)
 
-    p = iface_sub.add_parser("build", help="Build a coherent ZSL-matched interface")
-    # Positional arguments for required inputs
-    p.add_argument("film", help="Film bulk structure file")
-    p.add_argument("substrate", help="Substrate bulk structure file")
-    p.add_argument(
-        "--miller-film", type=int, nargs=3, default=[1, 0, 0],
-        help="Film surface Miller indices (h k l)",
+    # --- list subcommand ---------------------------------------------------
+    p_list = iface_sub.add_parser(
+        "list", help="List available interface terminations",
     )
-    p.add_argument(
-        "--miller-substrate", type=int, nargs=3, default=[1, 1, 1],
-        help="Substrate surface Miller indices (h k l)",
+    _add_interface_common_args(p_list)
+    p_list.add_argument(
+        "--termination-ftol", type=float, default=0.25,
+        help="Tolerance for distinguishing termination planes (A)",
     )
+    p_list.add_argument("--json", help="Save results as JSON")
+    p_list.set_defaults(handler=_cmd_list)
+
+    # --- build subcommand --------------------------------------------------
+    p = iface_sub.add_parser(
+        "build", help="Build a coherent ZSL-matched interface",
+    )
+    _add_interface_common_args(p)
     p.add_argument(
         "--termination", default=0,
         help="Termination index, label, or 'all' (default: 0)",
     )
     p.add_argument(
-        "--max-area", type=float, default=400.0,
-        help="Max supercell area for ZSL search (A^2)",
+        "--termination-film", default=None,
+        help="Select film termination independently (index or label substring)",
     )
     p.add_argument(
-        "--max-length-tol", type=float, default=0.03,
-        help="Max length tolerance for ZSL matching",
-    )
-    p.add_argument(
-        "--max-angle-tol", type=float, default=0.01,
-        help="Max angle tolerance for ZSL matching",
+        "--termination-substrate", default=None,
+        help="Select substrate termination independently (index or label substring)",
     )
     p.add_argument(
         "--gap", type=float, default=2.5,
@@ -754,19 +1153,6 @@ def register_cli(subparsers) -> None:
     p.add_argument(
         "--angstrom-thickness", action="store_true",
         help="Interpret thickness as Angstroms instead of layers",
-    )
-    # Molecule preservation options
-    p.add_argument(
-        "--no-preserve-molecules", action="store_true",
-        help="Disable molecule preservation (use raw structures)",
-    )
-    p.add_argument(
-        "--mol-tol", type=float, default=0.45,
-        help="Bond detection tolerance for molecules (A)",
-    )
-    p.add_argument(
-        "--mol-min-size", type=int, default=2,
-        help="Min atoms to count as a molecule",
     )
     p.add_argument(
         "--output", "-o",

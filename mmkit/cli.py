@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import pkgutil
+import sys
 from pathlib import Path
 
 
@@ -64,7 +65,11 @@ def main():
     if not getattr(args, "category", None):
         parser.print_help()
     elif hasattr(args, "handler"):
-        args.handler(args)
+        try:
+            args.handler(args)
+        except (ValueError, FileNotFoundError, RuntimeError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
     else:
         parser.print_help()
 
