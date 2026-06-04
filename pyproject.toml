@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mmkit"
+version = "0.1.0"
+description = "Materials Modelling Toolkit"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.21",
+    "ase>=3.22",
+    "pymatgen>=2022.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov"]
+
+[project.scripts]
+mmkit = "mmkit.cli:main"
+
+
