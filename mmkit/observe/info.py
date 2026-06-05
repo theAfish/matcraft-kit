@@ -436,8 +436,10 @@ class VacuumInfo(InfoSection):
             n = dinfo["num_vacuum_layers"]
             print(f"    Vacuum  : {n} layer{'s' if n != 1 else ''}, "
                   f"total {dinfo['total_vacuum_A']:.2f} A")
-            for i, size in enumerate(dinfo["vacuum_sizes_A"], 1):
-                print(f"      layer {i}: {size:.2f} A")
+            # print layer sizes if n layers > 1
+            if n > 1:
+                for i, size in enumerate(dinfo["vacuum_sizes_A"], 1):
+                    print(f"      layer {i}: {size:.2f} A")
 
 
 class SlabCompositionInfo(InfoSection):
