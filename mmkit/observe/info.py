@@ -8,7 +8,7 @@ only requires writing a new ``InfoSection`` subclass and registering it.
 Built-in sections
 -----------------
 * **basic** — lattice, volume, composition, density
-* **vacuum** — vacuum-layer detection along the *c*-direction
+* **vacuum** — vacuum-layer detection along all lattice directions
 * **slabs** — per-slab composition and element distribution (when vacuum is present)
 """
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections import Counter
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -42,7 +42,12 @@ class InfoSection(ABC):
     def observe(self, structure: Structure) -> Dict[str, Any]:
         """Return a dict of information for *structure*."""
 
-    def print_section(self, info: Dict[str, Any], structure: Structure) -> None:
+    def print_section(
+        self,
+        info: Dict[str, Any],
+        structure: Structure,
+        all_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Pretty-print this section.  *info* is the dict from :meth:`observe`."""
         print(f"  [{self.key}]")
         for k, v in info.items():
@@ -73,7 +78,12 @@ class BasicInfo(InfoSection):
             "total_mass_amu": float(atoms.get_masses().sum()),
         }
 
-    def print_section(self, info: Dict[str, Any], structure: Structure) -> None:
+    def print_section(
+        self,
+        info: Dict[str, Any],
+        structure: Structure,
+        all_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
         lat = info["lattice"]
         print("[basic]")
         print(f"  Lattice : a={lat['a']:.4f}  b={lat['b']:.4f}  c={lat['c']:.4f} A")
@@ -83,77 +93,247 @@ class BasicInfo(InfoSection):
         print(f"  Comp.   : {info['composition']}")
         print(f"  Density : {info['density_g_cm3']:.4f} g/cm3")
 
+        # Show classification if available
+        if all_info and "vacuum" in all_info:
+            vac_info = all_info["vacuum"]
+            classification = vac_info.get("classification", "")
+            threshold = vac_info.get("threshold", 3.0)
+            print(f"  Class.  : {classification} (vacuum threshold {threshold:.1f} A)")
+
 
 # ---------------------------------------------------------------------------
-# Shared helpers for vacuum/slab analysis
+# Shared helpers for multi-direction vacuum/slab analysis
 # ---------------------------------------------------------------------------
 
-def _find_slab_groups(
-    structure: Structure,
-    threshold: float,
-) -> tuple[List[List[int]], np.ndarray, np.ndarray, float]:
-    """Group atoms into slab regions separated by vacuum gaps along *c*.
+_DIRECTION_LABELS = ("a", "b", "c")
+
+
+def _direction_normals(
+    cell_vectors: np.ndarray,
+) -> List[Tuple[str, Optional[np.ndarray], float]]:
+    """Compute perpendicular normal and cell height for each lattice direction.
+
+    For direction *d*, the normal is perpendicular to the plane formed by the
+    other two lattice vectors.  This is the physically meaningful direction
+    for slab/vacuum detection, and works for any cell shape (orthogonal or
+    triclinic).
 
     Parameters
     ----------
-    structure
-        The structure to analyse.
+    cell_vectors
+        3×3 array whose rows are the lattice vectors **a**, **b**, **c**.
+
+    Returns
+    -------
+    list of (label, normal, height)
+        *label* is ``'a'``, ``'b'``, or ``'c'``.
+        *normal* is the unit normal vector (or ``None`` for degenerate cells).
+        *height* is the perpendicular cell extent in Å along that normal.
+    """
+    vectors = np.asarray(cell_vectors, dtype=np.float64)
+    result: List[Tuple[str, Optional[np.ndarray], float]] = []
+
+    for d in range(3):
+        others = [vectors[i] for i in range(3) if i != d]
+        cross = np.cross(others[0], others[1])
+        cross_len = float(np.linalg.norm(cross))
+        if cross_len < 1e-10:
+            result.append((_DIRECTION_LABELS[d], None, 0.0))
+        else:
+            normal = cross / cross_len
+            height = float(abs(np.dot(vectors[d], normal)))
+            result.append((_DIRECTION_LABELS[d], normal, height))
+
+    return result
+
+
+def _detect_vacuum_1d(
+    cart_positions: np.ndarray,
+    normal: np.ndarray,
+    cell_height: float,
+    threshold: float,
+) -> Tuple[List[List[int]], np.ndarray, np.ndarray, np.ndarray]:
+    """Detect vacuum gaps and group atoms into slab regions along one direction.
+
+    Parameters
+    ----------
+    cart_positions
+        (N, 3) array of Cartesian atomic positions.
+    normal
+        Unit vector perpendicular to the slab plane for this direction.
+    cell_height
+        Cell extent along *normal* in Å.
     threshold
         Minimum gap size (Å) to count as vacuum.
 
     Returns
     -------
     slabs : list of list of int
-        Each inner list holds original atom indices belonging to one slab,
-        ordered from bottom to top (by fractional *z*).
-    sorted_indices : ndarray
-        Original atom indices sorted by fractional *z*.
+        Each inner list holds original atom indices belonging to one slab.
     all_gaps_A : ndarray
         All inter-atomic gaps in Å, including the periodic wrap-around gap.
-    c_length : float
-        Cell height along *c* in Å.
+    vacuum_mask : ndarray of bool
+        Which gaps exceed *threshold*.
+    sorted_indices : ndarray of int
+        Original atom indices sorted by projected coordinate.
     """
-    frac_z = structure.positions[:, 2]
-    c_length = float(structure.lattice.c)
-    n_atoms = len(frac_z)
+    n = len(cart_positions)
+    if n == 0 or cell_height < 1e-10:
+        return [], np.array([]), np.array([], dtype=bool), np.array([], dtype=int)
 
-    if n_atoms == 0:
-        return [], np.array([], dtype=int), np.array([]), c_length
+    # Project onto normal and wrap to [0, cell_height)
+    proj = (cart_positions @ normal) % cell_height
 
-    sorted_indices = np.argsort(frac_z)
-    sorted_z = frac_z[sorted_indices]
+    # Sort by projection
+    sorted_indices = np.argsort(proj)
+    sorted_proj = proj[sorted_indices]
 
-    gaps_frac = np.diff(sorted_z)
-    periodic_gap_frac = 1.0 - sorted_z[-1] + sorted_z[0]
-    all_gaps_frac = np.append(gaps_frac, periodic_gap_frac)
-    all_gaps_A = all_gaps_frac * c_length
+    # Compute gaps (including periodic wrap)
+    gaps = np.diff(sorted_proj)
+    periodic_gap = cell_height - sorted_proj[-1] + sorted_proj[0]
+    all_gaps = np.append(gaps, periodic_gap)
 
-    vacuum_mask = all_gaps_A > threshold
+    vacuum_mask = all_gaps > threshold
 
     if not vacuum_mask.any():
         # No vacuum → one slab containing all atoms
-        return [sorted_indices.tolist()], sorted_indices, all_gaps_A, c_length
+        return [sorted_indices.tolist()], all_gaps, vacuum_mask, sorted_indices
 
+    # Group atoms into slabs between consecutive vacuum gaps.
+    # Uses modular (circular) indexing to handle periodic wrapping.
     vacuum_positions = np.where(vacuum_mask)[0]
-
-    # Build slabs by collecting atoms between consecutive vacuum gaps.
-    # Use modular indexing to handle periodic wrapping correctly.
     slabs: List[List[int]] = []
     for k in range(len(vacuum_positions)):
         # Start after this vacuum gap, collect until next vacuum gap
-        start = (vacuum_positions[k] + 1) % n_atoms
+        start = (vacuum_positions[k] + 1) % n
         end = vacuum_positions[(k + 1) % len(vacuum_positions)]
 
-        slab_idx = []
+        slab_idx: List[int] = []
         idx = start
-        while idx != end:
+        while True:
             slab_idx.append(int(sorted_indices[idx]))
-            idx = (idx + 1) % n_atoms
+            if idx == end:
+                break
+            idx = (idx + 1) % n
 
         if slab_idx:
             slabs.append(slab_idx)
 
-    return slabs, sorted_indices, all_gaps_A, c_length
+    return slabs, all_gaps, vacuum_mask, sorted_indices
+
+
+def _detect_layers(
+    atom_indices: List[int],
+    cart_positions: np.ndarray,
+    normal: np.ndarray,
+    cell_height: float,
+    tolerance: float = 0.5,
+) -> List[Tuple[List[int], np.ndarray]]:
+    """Cluster atoms within a slab into layers by projected coordinate.
+
+    Atoms whose projections differ by less than *tolerance* Å are grouped
+    into the same layer.  Handles periodic wrapping by finding the largest
+    circular gap (where the slab is *not*) and linearizing from there.
+
+    Parameters
+    ----------
+    atom_indices
+        Original atom indices belonging to one slab.
+    cart_positions
+        (N, 3) array of Cartesian positions for the full structure.
+    normal
+        Unit normal for the slab direction.
+    cell_height
+        Cell extent along *normal* in Å.
+    tolerance
+        Maximum projection gap (Å) for two atoms to be in the same layer.
+
+    Returns
+    -------
+    list of (atom_indices, linearized_projections)
+        Each entry holds original atom indices and their unwrapped projected
+        coordinates (Å) for one layer, ordered from low to high.
+    """
+    if not atom_indices or cell_height < 1e-10:
+        return []
+
+    idx = np.asarray(atom_indices, dtype=int)
+    proj = (cart_positions[idx] @ normal) % cell_height
+    # Fix floating-point edge: atoms at exactly 0 or cell_height may get
+    # mod_proj ≈ cell_height instead of 0
+    proj[proj >= cell_height - 1e-4] = 0.0
+    n = len(idx)
+
+    if n <= 1:
+        return [(atom_indices[:], proj)]
+
+    # Sort by projection
+    order = np.argsort(proj)
+    sorted_proj = proj[order]
+    sorted_idx = idx[order]
+
+    # Compute circular gaps (including periodic wrap-around)
+    gaps = np.diff(sorted_proj)
+    wrap_gap = cell_height - sorted_proj[-1] + sorted_proj[0]
+    all_gaps = np.append(gaps, wrap_gap)
+
+    # The largest gap is "where the slab is not" — cut there to linearize
+    cut = int(np.argmax(all_gaps))
+
+    if cut == n - 1:
+        # Largest gap is the wrap-around → already linear, no unwrapping needed
+        lin_proj = sorted_proj.copy()
+        lin_idx = sorted_idx.copy()
+    else:
+        # Rotate so the cut is at the start, unwrap the wrapped segment
+        lin_order = np.roll(order, -(cut + 1))
+        lin_idx = idx[lin_order]
+        lin_proj = proj[lin_order].copy()
+        # Add cell_height to atoms that wrapped around
+        lin_proj[lin_proj < lin_proj[0]] += cell_height
+
+    # Group consecutive atoms into layers
+    layers: List[Tuple[List[int], np.ndarray]] = []
+    current_indices: List[int] = [int(lin_idx[0])]
+    current_projs: List[float] = [float(lin_proj[0])]
+
+    for i in range(1, n):
+        if lin_proj[i] - lin_proj[i - 1] >= tolerance:
+            layers.append((current_indices, np.array(current_projs) % cell_height))
+            current_indices = [int(lin_idx[i])]
+            current_projs = [float(lin_proj[i])]
+        else:
+            current_indices.append(int(lin_idx[i]))
+            current_projs.append(float(lin_proj[i]))
+
+    layers.append((current_indices, np.array(current_projs) % cell_height))
+    return layers
+
+
+def _classify(directions: Dict[str, Dict[str, Any]]) -> str:
+    """Heuristic classification based on vacuum across all directions."""
+    vacuum_dirs = [d for d in _DIRECTION_LABELS
+                   if directions.get(d, {}).get("has_vacuum", False)]
+    n = len(vacuum_dirs)
+
+    if n == 0:
+        return "bulk"
+
+    dir_str = ", ".join(vacuum_dirs)
+
+    if n == 1:
+        d = vacuum_dirs[0]
+        n_layers = directions[d]["num_vacuum_layers"]
+        if n_layers == 1:
+            return f"surface slab (vacuum along {d})"
+        if n_layers == 2:
+            return f"interface / thin film (vacuum along {d})"
+        return f"multi-gap slab ({n_layers} vacuum layers along {d})"
+
+    if n == 2:
+        return f"nanowire / 1D (vacuum along {dir_str})"
+
+    return f"nanocluster / 0D (vacuum along {dir_str})"
 
 
 # ---------------------------------------------------------------------------
@@ -161,184 +341,278 @@ def _find_slab_groups(
 # ---------------------------------------------------------------------------
 
 class VacuumInfo(InfoSection):
-    """Detect vacuum layers along the *c*-direction.
+    """Detect vacuum layers along lattice directions.
 
-    A *vacuum layer* is any gap between consecutive atoms (projected onto
-    the *c*-vector) that exceeds ``threshold`` Å, including the periodic
-    gap that wraps from the topmost atom back to the bottommost.
+    For each lattice direction (a, b, c), projects atomic positions onto the
+    perpendicular normal and identifies gaps exceeding ``threshold`` Å,
+    including the periodic wrap-around gap.
 
     Parameters
     ----------
     threshold
         Minimum gap size (Å) to count as a vacuum layer.
+    directions
+        Which lattice directions to check.  ``None`` (default) checks all
+        three (a, b, c).  Pass e.g. ``['c']`` to restrict.
     """
 
     key = "vacuum"
 
-    def __init__(self, threshold: float = 3.0) -> None:
+    def __init__(
+        self,
+        threshold: float = 3.0,
+        directions: Optional[List[str]] = None,
+    ) -> None:
         self.threshold = threshold
+        self._check_dirs = set(directions) if directions else set(_DIRECTION_LABELS)
 
     def observe(self, structure: Structure) -> Dict[str, Any]:
-        frac_z = structure.positions[:, 2]
-        c_length = structure.lattice.c
+        cell = np.asarray(structure.atoms.cell.array)
+        cart_pos = structure.cart_positions
+        dir_info = _direction_normals(cell)
 
-        if len(frac_z) == 0:
-            return {
-                "has_vacuum": False,
-                "num_vacuum_layers": 0,
-                "vacuum_sizes_A": [],
-                "total_vacuum_A": 0.0,
-                "slab_thickness_A": 0.0,
-                "cell_height_A": float(c_length),
-                "classification": "empty",
+        directions: Dict[str, Dict[str, Any]] = {}
+        vacuum_dirs: List[str] = []
+
+        for label, normal, height in dir_info:
+            if label not in self._check_dirs or normal is None:
+                directions[label] = {
+                    "has_vacuum": False,
+                    "num_vacuum_layers": 0,
+                    "vacuum_sizes_A": [],
+                    "total_vacuum_A": 0.0,
+                    "slab_thickness_A": round(height, 4),
+                    "cell_height_A": round(height, 4),
+                }
+                continue
+
+            _slabs, gaps, vac_mask, _ = _detect_vacuum_1d(
+                cart_pos, normal, height, self.threshold
+            )
+
+            vac_sizes = gaps[vac_mask]
+            num_vac = int(vac_mask.sum())
+            total_vac = float(vac_sizes.sum()) if num_vac else 0.0
+
+            if num_vac > 0:
+                vacuum_dirs.append(label)
+
+            directions[label] = {
+                "has_vacuum": num_vac > 0,
+                "num_vacuum_layers": num_vac,
+                "vacuum_sizes_A": [round(float(s), 4) for s in vac_sizes],
+                "total_vacuum_A": round(total_vac, 4),
+                "slab_thickness_A": round(height - total_vac, 4),
+                "cell_height_A": round(height, 4),
             }
 
-        _slabs, _, all_gaps_A, c_length = _find_slab_groups(
-            structure, self.threshold
-        )
-
-        # Identify vacuum layers
-        vacuum_mask = all_gaps_A > self.threshold
-        vacuum_sizes = all_gaps_A[vacuum_mask]
-        num_vacuum = int(vacuum_mask.sum())
-        total_vacuum = float(vacuum_sizes.sum()) if num_vacuum else 0.0
-
-        # Slab thickness = cell height minus all vacuum gaps.
-        slab_thickness = float(c_length) - total_vacuum
-
-        # Heuristic classification
-        classification = _classify(num_vacuum)
+        classification = _classify(directions)
 
         return {
-            "has_vacuum": num_vacuum > 0,
-            "num_vacuum_layers": num_vacuum,
-            "vacuum_sizes_A": [round(float(s), 4) for s in vacuum_sizes],
-            "total_vacuum_A": round(total_vacuum, 4),
-            "slab_thickness_A": round(slab_thickness, 4),
-            "cell_height_A": round(float(c_length), 4),
+            "directions": directions,
+            "num_vacuum_directions": len(vacuum_dirs),
+            "vacuum_directions": vacuum_dirs,
             "classification": classification,
+            "threshold": self.threshold,
         }
 
-    def print_section(self, info: Dict[str, Any], structure: Structure) -> None:
-        cls = info["classification"]
-        print("[Vacuum layer(s) detected]")
-        print(f"  Type    : {cls}")
-        if not info["has_vacuum"]:
-            print(f"  Vacuum  : none detected (threshold {self.threshold:.1f} A)")
+    def print_section(
+        self,
+        info: Dict[str, Any],
+        structure: Structure,
+        all_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        # Skip if no vacuum detected (classification shown in BasicInfo)
+        if info["num_vacuum_directions"] == 0:
             return
 
-        # print(f"  Slab    : {info['slab_thickness_A']:.2f} A thick")
-        # print(f"  Cell c  : {info['cell_height_A']:.2f} A")
-        n = info["num_vacuum_layers"]
-        print(f"  Vacuum  : {n} layer{'s' if n != 1 else ''}, "
-              f"total {info['total_vacuum_A']:.2f} A")
-        for i, size in enumerate(info["vacuum_sizes_A"], 1):
-            print(f"    layer {i}: {size:.2f} A")
+        print("[Vacuum layer(s) detected]")
+
+        for d in info["vacuum_directions"]:
+            dinfo = info["directions"][d]
+            print(f"  Direction {d}:")
+            print(f"    Slab    : {dinfo['slab_thickness_A']:.2f} A thick")
+            print(f"    Cell    : {dinfo['cell_height_A']:.2f} A")
+            n = dinfo["num_vacuum_layers"]
+            print(f"    Vacuum  : {n} layer{'s' if n != 1 else ''}, "
+                  f"total {dinfo['total_vacuum_A']:.2f} A")
+            for i, size in enumerate(dinfo["vacuum_sizes_A"], 1):
+                print(f"      layer {i}: {size:.2f} A")
 
 
 class SlabCompositionInfo(InfoSection):
     """Per-slab composition and element distribution.
 
-    Only reports when vacuum layers are detected.  For each slab region
-    (separated by vacuum gaps), computes composition, atom count, and
-    *z*-range.  Also provides statistical summary of element distribution.
+    Only reports when vacuum layers are detected.  For each vacuum direction,
+    splits atoms into slab regions and computes composition, atom count, and
+    extent along that direction.  When ``show_layers`` is enabled, atoms
+    within each slab are further clustered into layers by their projected
+    coordinate.
 
     Parameters
     ----------
     threshold
         Minimum gap size (Å) to count as vacuum (should match VacuumInfo).
+    directions
+        Which lattice directions to check.  ``None`` (default) checks all.
+    layer_tolerance
+        Maximum projection gap (Å) for atoms to belong to the same layer
+        within a slab.  Default 0.5 Å.
+    show_layers
+        Whether to compute and display per-layer composition within each
+        slab.  Default ``True``.
     """
 
     key = "slabs"
 
-    def __init__(self, threshold: float = 3.0) -> None:
+    def __init__(
+        self,
+        threshold: float = 3.0,
+        directions: Optional[List[str]] = None,
+        layer_tolerance: float = 2.0,
+        show_layers: bool = True,
+    ) -> None:
         self.threshold = threshold
+        self.layer_tolerance = layer_tolerance
+        self.show_layers = show_layers
+        self._check_dirs = set(directions) if directions else set(_DIRECTION_LABELS)
 
     def observe(self, structure: Structure) -> Dict[str, Any]:
-        frac_z = structure.positions[:, 2]
-        c_length = float(structure.lattice.c)
+        cell = np.asarray(structure.atoms.cell.array)
+        cart_pos = structure.cart_positions
         symbols = structure.symbols
+        dir_info = _direction_normals(cell)
 
-        if len(frac_z) == 0:
-            return {"has_vacuum": False, "slabs": [], "element_distribution": {}}
+        result: Dict[str, Any] = {"directions": {}, "has_vacuum": False}
 
-        slabs, _, all_gaps_A, c_length = _find_slab_groups(
-            structure, self.threshold
-        )
+        if len(cart_pos) == 0:
+            return result
 
-        has_vacuum = bool((all_gaps_A > self.threshold).any())
+        for label, normal, height in dir_info:
+            if label not in self._check_dirs or normal is None:
+                continue
 
-        slab_info = []
-        for idx_list in slabs:
-            slab_symbols = [symbols[i] for i in idx_list]
-            slab_frac_z = frac_z[idx_list]
-            slab_cart_z = slab_frac_z * c_length
-            slab_info.append({
-                "num_atoms": len(idx_list),
-                "composition": dict(Counter(slab_symbols)),
-                "z_range_A": (round(float(slab_cart_z.min()), 4),
-                              round(float(slab_cart_z.max()), 4)),
-            })
+            slabs, _, vac_mask, _ = _detect_vacuum_1d(
+                cart_pos, normal, height, self.threshold
+            )
 
-        # Element distribution: for each element, list (slab_index, count)
-        element_dist: Dict[str, List[dict]] = {}
-        all_elements = sorted(set(symbols))
-        for elem in all_elements:
-            elem_dist = []
-            for si, slab in enumerate(slab_info):
-                if elem in slab["composition"]:
-                    elem_dist.append({
-                        "slab": si,
-                        "count": slab["composition"][elem],
-                    })
-            element_dist[elem] = elem_dist
+            if vac_mask.any():
+                result["has_vacuum"] = True
 
-        return {
-            "has_vacuum": has_vacuum,
-            "slabs": slab_info,
-            "element_distribution": element_dist,
-        }
+            # Projected coordinates for extent calculation
+            proj = (cart_pos @ normal) % height
 
-    def print_section(self, info: Dict[str, Any], structure: Structure) -> None:
-        if not info["has_vacuum"]:
-            # Don't print anything for bulk structures
+            slab_info: List[Dict[str, Any]] = []
+            for idx_list in slabs:
+                slab_symbols = [symbols[i] for i in idx_list]
+                slab_proj = proj[idx_list]
+                entry: Dict[str, Any] = {
+                    "num_atoms": len(idx_list),
+                    "composition": dict(Counter(slab_symbols)),
+                    "extent_A": (
+                        round(float(slab_proj.min()), 4),
+                        round(float(slab_proj.max()), 4),
+                    ),
+                }
+
+                # Per-layer decomposition within this slab
+                if self.show_layers:
+                    layers = _detect_layers(
+                        idx_list, cart_pos, normal, height, self.layer_tolerance
+                    )
+                    layer_list: List[Dict[str, Any]] = []
+                    for layer_idx, layer_lin_proj in layers:
+                        layer_symbols = [symbols[i] for i in layer_idx]
+                        ext_min = round(float(layer_lin_proj.min()), 4)
+                        ext_max = round(float(layer_lin_proj.max()), 4)
+                        layer_list.append({
+                            "num_atoms": len(layer_idx),
+                            "composition": dict(Counter(layer_symbols)),
+                            "extent_A": (ext_min, ext_max),
+                            "center_A": round((ext_min + ext_max) / 2, 4),
+                        })
+                    entry["layers"] = layer_list
+
+                slab_info.append(entry)
+
+            # Element distribution across slabs
+            all_elements = sorted(set(symbols))
+            element_dist: Dict[str, List[Dict[str, Any]]] = {}
+            for elem in all_elements:
+                elem_dist: List[Dict[str, Any]] = []
+                for si, slab in enumerate(slab_info):
+                    if elem in slab["composition"]:
+                        elem_dist.append({
+                            "slab": si,
+                            "count": slab["composition"][elem],
+                        })
+                element_dist[elem] = elem_dist
+
+            result["directions"][label] = {
+                "slabs": slab_info,
+                "element_distribution": element_dist,
+                "cell_height_A": round(height, 4),
+            }
+
+        return result
+
+    def print_section(
+        self,
+        info: Dict[str, Any],
+        structure: Structure,
+        all_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not info.get("directions"):
             return
 
-        slabs = info["slabs"]
-        print(f"[Slab composition ({len(slabs)} region{'s' if len(slabs) != 1 else ''})]")
-        for i, slab in enumerate(slabs):
-            z_min, z_max = slab["z_range_A"]
-            print(f"  Slab {i}: {slab['num_atoms']} atoms, "
-                  f"z=[{z_min:.2f}, {z_max:.2f}] A, {z_max - z_min:.2f} A thick")
-            print(f"    Comp. : {slab['composition']}")
+        for label, dinfo in info["directions"].items():
+            slabs = dinfo["slabs"]
+            n_slabs = len(slabs)
 
-        # Statistical summary: element distribution
-        # print("  Element distribution:")
-        # elem_dist = info["element_distribution"]
-        # for elem in sorted(elem_dist.keys()):
-        #     locations = elem_dist[elem]
-        #     if len(locations) == 1:
-        #         loc = locations[0]
-        #         print(f"    {elem:2s}: only in slab {loc['slab']} "
-        #               f"({loc['count']} atoms)")
-        #     else:
-        #         parts = [f"slab {loc['slab']}: {loc['count']}" for loc in locations]
-        #         print(f"    {elem:2s}: {'   '.join(parts)}")
+            # Omit directions with no interesting structure — a single
+            # region with ≤1 layer adds nothing beyond [basic].
+            layers = slabs[0].get("layers", []) if slabs else []
+            if n_slabs == 1 and len(layers) <= 1:
+                continue
 
+            # Header: different phrasing for vacuum vs non-vacuum directions
+            if info.get("has_vacuum"):
+                header = f"Slab composition"
+            else:
+                header = f"Layer composition"
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+            print(f"[{header} — direction {label} "
+                  f"({n_slabs} region{'s' if n_slabs != 1 else ''})]")
+            for i, slab in enumerate(slabs):
+                ext_min, ext_max = slab["extent_A"]
+                print(f"  Slab {i}: {slab['num_atoms']} atoms, "
+                      f"extent=[{ext_min:.2f}, {ext_max:.2f}] A, "
+                      f"{ext_max - ext_min:.2f} A thick")
+                print(f"    Comp. : {slab['composition']}")
 
-def _classify(num_vacuum: int) -> str:
-    """Heuristic structure classification based on vacuum layer count."""
-    if num_vacuum == 0:
-        return "bulk"
-    if num_vacuum == 1:
-        return "surface slab"
-    if num_vacuum == 2:
-        return "interface / thin film"
-    return f"multi-gap ({num_vacuum} vacuum layers)"
+                # Per-layer breakdown
+                layers = slab.get("layers", [])
+                if self.show_layers and len(layers) > 1:
+                    print(f"    Layers ({len(layers)}):")
+                    for li, layer in enumerate(layers):
+                        lmin, lmax = layer["extent_A"]
+                        print(f"      Layer {li}: {layer['num_atoms']:>3d} atoms, "
+                              f"z=[{lmin:.2f}, {lmax:.2f}] A, "
+                              f"center={layer['center_A']:.2f} A  "
+                              f"{layer['composition']}")
+
+            # Element distribution:
+            # elem_dist = dinfo["element_distribution"]
+            # print("  Element distribution:")
+            # for elem in sorted(elem_dist.keys()):
+            #     locations = elem_dist[elem]
+            #     if len(locations) == 1:
+            #         loc = locations[0]
+            #         print(f"    {elem:2s}: only in slab {loc['slab']} "
+            #               f"({loc['count']} atoms)")
+            #     else:
+            #         parts = [f"slab {loc['slab']}: {loc['count']}" for loc in locations]
+            #         print(f"    {elem:2s}: {'   '.join(parts)}")
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +636,8 @@ class StructureInfo(Observation):
     Parameters
     ----------
     sections
-        Sections to run.  Defaults to :class:`BasicInfo` + :class:`VacuumInfo`.
+        Sections to run.  Defaults to :class:`BasicInfo` + :class:`VacuumInfo`
+        + :class:`SlabCompositionInfo`.
     """
 
     def __init__(self, sections: Optional[List[InfoSection]] = None) -> None:
@@ -380,7 +655,7 @@ class StructureInfo(Observation):
         # print("=== Structure Info ===")
         for section in self.sections:
             section_data = info.get(section.key, {})
-            section.print_section(section_data, structure)
+            section.print_section(section_data, structure, all_info=info)
 
 
 # ---------------------------------------------------------------------------
