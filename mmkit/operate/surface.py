@@ -1208,7 +1208,13 @@ def _add_surface_args(p) -> None:
 
 def register_cli(subparsers) -> None:
     """Register surface subcommands with the mmkit CLI."""
-    surface = subparsers.add_parser("surface", help="Surface slab tools")
+    surface = subparsers.add_parser(
+        "surface", 
+        help="Surface slab tools",
+        description="Discover terminations and build slabs with termination control.",
+        epilog="Hint: it is very important in many cases to choose and check the surface termination for modelling.",
+        # formatter_class=argparse.RawDescriptionHelpFormatter,  # preserve newlines
+    )
     surface_sub = surface.add_subparsers(dest="action", required=True)
 
     p_list = surface_sub.add_parser("list", help="Discover all terminations")

@@ -12,6 +12,7 @@ This prevents molecules from being cut by the slab boundaries.
 
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -1102,7 +1103,19 @@ def _cmd_build(args):
 
 def register_cli(subparsers) -> None:
     """Register interface subcommands with the mmkit CLI."""
-    interface = subparsers.add_parser("interface", help="Build coherent interfaces")
+    interface = subparsers.add_parser(
+        "interface", 
+        help="Build coherent interfaces",
+        description=(
+            "Build coherent interfaces between two bulk crystals using the "
+            "Zur algorithm.  Supports molecule preservation and flexible "
+            "termination selection."
+        ),
+        epilog="Hint: it is very important in many cases to choose and check the termination of each slab for modelling.\n" \
+        "Unless explicitly requested, avoid creating interfaces by cutting through strong chemical bonds.\n" \
+        "Prefer cleavage planes that minimize bond breaking and preserve stable coordination environments on both sides of the interface.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,  # preserve newlines
+    )
     iface_sub = interface.add_subparsers(dest="action", required=True)
 
     # --- list subcommand ---------------------------------------------------
