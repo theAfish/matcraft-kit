@@ -46,14 +46,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     operate = top_sub.add_parser("operate", help="Build / modify structures")
     observe = top_sub.add_parser("observe", help="Inspect structures")
+    # defect = top_sub.add_parser("defect", help="Quick defect workflows")
 
     op_sub = operate.add_subparsers(dest="tool")
     ob_sub = observe.add_subparsers(dest="tool")
+    # defect_sub = defect.add_subparsers(dest="tool")
 
     for mod in _discover_modules():
         package = mod.__name__.split(".")[-2]  # 'operate' or 'observe'
         sub = op_sub if package == "operate" else ob_sub
         mod.register_cli(sub)
+
+    # # Optional top-level shortcuts (currently defect workflows).
+    # try:
+    #     from mmkit.operate import defect_creation as defect_mod
+
+    #     if hasattr(defect_mod, "register_cli_root"):
+    #         defect_mod.register_cli_root(defect_sub)
+    # except Exception:
+    #     # Keep CLI resilient if optional shortcut wiring fails.
+    #     pass
 
     return parser
 
