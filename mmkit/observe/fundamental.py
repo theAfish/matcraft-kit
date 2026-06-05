@@ -1,4 +1,14 @@
-"""Validate / sanity-check a structure."""
+"""Fundamental geometric validation of a structure.
+
+This module provides *fundamental* checks — basic geometric sanity tests
+such as atom overlap detection, fractional-coordinate bounds, and density
+plausibility.  Passing these checks confirms the structure is geometrically
+well-formed, but does **not** guarantee the modelling is semantically correct
+(e.g. a bulk crystal will pass even if the user intended a surface slab).
+
+Advanced, task-specific checks (surface validation, defect analysis, …)
+will live in their own modules under ``mmkit.observe``.
+"""
 
 from __future__ import annotations
 
@@ -24,13 +34,19 @@ class CheckResult:
         return f"CheckResult({status}, warnings={len(self.warnings)}, errors={len(self.errors)})"
 
 
-class StructureCheck(Observation):
-    """Run sanity checks on a structure.
+class FundamentalCheck(Observation):
+    """Run fundamental geometric checks on a structure.
 
-    Checks:
+    These checks verify basic geometric correctness only:
+
       1. Overlapping atoms (distance < ``min_dist`` Å, MIC)
       2. Fractional coords outside [0, 1) (warning only)
       3. Density outside ``density_bounds`` g/cm³
+
+    A passing result means the structure is geometrically well-formed.
+    It does **not** validate whether the structure matches the intended
+    modelling task (e.g. surface vs. bulk).  Use task-specific checks
+    for semantic validation.
     """
 
     def __init__(
@@ -92,7 +108,7 @@ class StructureCheck(Observation):
 # ---------------------------------------------------------------------------
 
 def _cmd_check(args):
-    """CLI handler: validate a structure."""
+    """CLI handler: fundamental geometric validation."""
     import json
     import sys
     from mmkit.io import read_structure
@@ -101,7 +117,7 @@ def _cmd_check(args):
     atoms = read_structure(args.input)
     structure = Structure.from_ase_atoms(atoms)
 
-    checker = StructureCheck(
+    checker = FundamentalCheck(
         min_dist=args.min_dist,
         density_bounds=tuple(args.density_bounds),
     )
@@ -112,7 +128,7 @@ def _cmd_check(args):
         print(json.dumps(dataclasses.asdict(result), indent=2))
     else:
         status = "PASS" if result.passed else "FAIL"
-        print(f"Check: {status}")
+        print(f"Fundamental check: {status}")
         if result.warnings or args.verbose:
             for w in result.warnings:
                 print(f"  WARNING: {w}")
@@ -124,8 +140,11 @@ def _cmd_check(args):
 
 
 def register_cli(subparsers) -> None:
-    """Register check subcommands with the mmkit CLI."""
-    p = subparsers.add_parser("check", help="Validate / sanity-check a structure")
+    """Register the fundamental check subcommand with the mmkit CLI."""
+    p = subparsers.add_parser(
+        "basic_check",
+        help="Fundamental geometric validation of a structure",
+    )
     p.add_argument("input", help="Structure file (CIF, POSCAR, extxyz, ...)")
     p.add_argument("--min-dist", type=float, default=0.5,
                    help="Minimum allowed distance (A, default: 0.5)")

@@ -47,7 +47,7 @@ print(cu)
 ### Inspect a Structure
 
 ```python
-from mmkit.observations import StructureInfo, StructureCheck
+from mmkit.observe import StructureInfo, FundamentalCheck
 
 # Get structural information
 info = StructureInfo()
@@ -58,8 +58,8 @@ print(f"Composition: {result['composition']}")
 # Or pretty-print
 info.print_summary(cu)
 
-# Validate a structure
-checker = StructureCheck(min_dist=0.5)
+# Fundamental geometric validation (overlap / density checks)
+checker = FundamentalCheck(min_dist=0.5)
 check = checker.observe(cu)
 print(check)  # CheckResult(PASS, warnings=0, errors=0)
 ```
@@ -251,7 +251,7 @@ mmkit/
 │   └── surface.py           # SurfaceBuilder, TerminationAnalyzer, MoleculeDetector
 ├── observe/
 │   ├── info.py              # StructureInfo — structural summary
-│   └── check.py             # StructureCheck — validation checks
+│   └── fundamental.py       # FundamentalCheck — geometric validity checks
 └── io/
     ├── reader.py            # read_structure() -> ASE Atoms
     └── writer.py            # write_structure() — ASE io.write
