@@ -26,14 +26,24 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 from ase import Atoms
 from ase.build import surface as ase_surface
-from pymatgen.core import Lattice as PmgLattice
-from pymatgen.core import Structure as PmgStructure
-from pymatgen.io.ase import AseAtomsAdaptor
-from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 from mmkit.core.structure import Structure
 from mmkit.core.tool import Operation
 from mmkit.io.writer import write_atoms
+
+
+def _get_pymatgen_types():
+    """Import pymatgen types lazily so the module loads without pymatgen."""
+    from pymatgen.core import Lattice as PmgLattice
+    from pymatgen.core import Structure as PmgStructure
+    from pymatgen.io.ase import AseAtomsAdaptor
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+    return {
+        "PmgLattice": PmgLattice,
+        "PmgStructure": PmgStructure,
+        "AseAtomsAdaptor": AseAtomsAdaptor,
+        "SpacegroupAnalyzer": SpacegroupAnalyzer,
+    }
 
 
 # ===================================================================
@@ -171,6 +181,7 @@ class TerminationAnalyzer:
     # ------------------------------------------------------------------
     def _to_conventional(self) -> PmgStructure:
         """Convert bulk to conventional standard cell."""
+        SpacegroupAnalyzer = _get_pymatgen_types()["SpacegroupAnalyzer"]
         analyzer = SpacegroupAnalyzer(self.bulk, symprec=0.1)
         return analyzer.get_conventional_standard_structure()
 
@@ -698,14 +709,14 @@ class MoleculeRepair:
         new_c = thickness + max(vacuum, 15.0)
         new_cc_arr[:, 2] -= z_min
 
-        new_lat = PmgLattice.from_parameters(
+        new_lat = _get_pymatgen_types()["PmgLattice"].from_parameters(
             slab.lattice.a, slab.lattice.b, new_c,
             slab.lattice.alpha, slab.lattice.beta, slab.lattice.gamma,
         )
         new_frac = new_lat.get_fractional_coords(new_cc_arr) % 1.0
 
         z_ord = np.argsort(new_frac[:, 2])
-        final = PmgStructure(
+        final = _get_pymatgen_types()["PmgStructure"](
             new_lat,
             [new_sp[i] for i in z_ord],
             [new_frac[i] for i in z_ord],
@@ -868,6 +879,7 @@ class SurfaceBuilder(Operation):
             slab_atoms = t.slab  # ASE Atoms
 
             if self.preserve_molecules and molecules:
+                AseAtomsAdaptor = _get_pymatgen_types()["AseAtomsAdaptor"]
                 slab_pm = AseAtomsAdaptor().get_structure(slab_atoms)
                 repair = MoleculeRepair(
                     bulk=bulk,
@@ -1122,6 +1134,7 @@ def cmd_build_slab(args) -> None:
         slab_atoms = t.slab
 
         if not args.no_preserve_molecules and molecules:
+            AseAtomsAdaptor = _get_pymatgen_types()["AseAtomsAdaptor"]
             slab_pm = AseAtomsAdaptor().get_structure(slab_atoms)
             repair = MoleculeRepair(
                 bulk=bulk,

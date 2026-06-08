@@ -24,8 +24,6 @@ from typing import Optional
 import numpy as np
 from ase import Atoms
 from ase.build import molecule as ase_molecule
-from rdkit import Chem
-from rdkit.Chem import AllChem
 
 from mmkit.core.structure import Structure
 from mmkit.core.tool import Operation
@@ -90,6 +88,9 @@ class SMILESMoleculeBuilder(Operation):
         vacuum
             Vacuum padding (Å) added around the molecule.
         """
+        from rdkit import Chem
+        from rdkit.Chem import AllChem
+
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             # Provide helpful hints for common SMILES errors
@@ -205,40 +206,6 @@ def _cmd_from_smiles(args):
           f"({len(structure.atoms)} atoms)")
 
 
-def _cmd_organometallic(args):
-    """CLI handler: build an organometallic compound."""
-    from mmkit.io import write_atoms
-
-    builder = OrganometallicBuilder()
-    structure = builder.apply(mol_type=args.type)
-    output = args.output or f"mol_{args.type}.extxyz"
-    path = write_atoms(output, structure.atoms)
-    print(f"Built organometallic {args.type!r} -> {path}  "
-          f"({len(structure.atoms)} atoms)")
-
-
-def _cmd_endohedral(args):
-    """CLI handler: build an endohedral (molecule-in-cage) structure."""
-    from mmkit.io import write_atoms
-
-    builder = EndohedralBuilder()
-    kwargs = dict(
-        cage_type=args.cage,
-        guest=args.guest,
-        buffer=args.buffer,
-    )
-    if args.cage_radius is not None:
-        kwargs["cage_radius"] = args.cage_radius
-    if args.n_cage_atoms is not None:
-        kwargs["n_cage_atoms"] = args.n_cage_atoms
-    if args.guest_smiles:
-        kwargs["guest_smiles"] = args.guest_smiles
-
-    structure = builder.apply(**kwargs)
-    output = args.output or f"endohedral_{args.cage}_{args.guest}.extxyz"
-    path = write_atoms(output, structure.atoms)
-    print(f"Built endohedral {args.guest!r}@{args.cage} -> {path}  "
-          f"({len(structure.atoms)} atoms)")
 
 
 # ---------------------------------------------------------------------------

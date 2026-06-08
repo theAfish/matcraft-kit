@@ -15,8 +15,6 @@ from ase.build import bulk as ase_bulk
 from mmkit.core.structure import Structure
 from mmkit.core.tool import Operation
 
-from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-
 
 class BulkBuilder(Operation):
     """Build a bulk crystal of the requested structure type.
@@ -87,6 +85,7 @@ class BulkBuilder(Operation):
         atoms = ase_bulk(name, **kwargs)
         structure = Structure.from_ase_atoms(atoms).to_pymatgen()
         if conventional_unit_cell:
+            from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
             analyzer = SpacegroupAnalyzer(structure)
             structure = analyzer.get_conventional_standard_structure()
             # structure = Structure.from_pymatgen(pmg_conv)

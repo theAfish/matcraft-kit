@@ -6,7 +6,6 @@ from typing import Optional, Sequence, Union
 
 import numpy as np
 from ase import Atoms
-from ase.data import covalent_radii
 
 from mmkit.core.structure import Structure
 from mmkit.core.tool import Operation
@@ -156,6 +155,7 @@ def _generate_displacements(
         )
 
     elif mode == "scaled_random":
+        from ase.data import covalent_radii
         for idx in indices:
             radius = covalent_radii[atoms[idx].number]
             scale = radius if radius > 0.0 else 1.0

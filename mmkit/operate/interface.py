@@ -18,14 +18,25 @@ from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from ase import Atoms
-from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
-from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
-from pymatgen.core import Lattice as PmgLattice
-from pymatgen.core import Structure as PmgStructure
-from pymatgen.io.ase import AseAtomsAdaptor
 
 from mmkit.core.structure import Structure
 from mmkit.core.tool import Operation
+
+
+def _get_pymatgen_types():
+    """Import pymatgen types lazily so the module loads without pymatgen."""
+    from pymatgen.analysis.interfaces.coherent_interfaces import CoherentInterfaceBuilder
+    from pymatgen.analysis.interfaces.substrate_analyzer import SubstrateAnalyzer
+    from pymatgen.core import Lattice as PmgLattice
+    from pymatgen.core import Structure as PmgStructure
+    from pymatgen.io.ase import AseAtomsAdaptor
+    return {
+        "CoherentInterfaceBuilder": CoherentInterfaceBuilder,
+        "SubstrateAnalyzer": SubstrateAnalyzer,
+        "PmgLattice": PmgLattice,
+        "PmgStructure": PmgStructure,
+        "AseAtomsAdaptor": AseAtomsAdaptor,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +133,8 @@ def _create_pseudo_structure(
     """Replace each molecule with a single X pseudo-atom at its center."""
     _ensure_dummy_patched()
     from pymatgen.core.periodic_table import DummySpecies
+
+    PmgStructure = _get_pymatgen_types()["PmgStructure"]
 
     mol_set = set()
     for mol in molecules:
@@ -380,6 +393,7 @@ def _recalculate_gap(
     M = np.array(lattice.matrix)
     new_c = M[2].copy()
     new_c[2] += shift_z
+    PmgLattice = _get_pymatgen_types()["PmgLattice"]
     new_lattice = PmgLattice([M[0], M[1], new_c])
 
     return new_cart, new_lattice
@@ -457,6 +471,7 @@ class InterfaceBuilder(Operation):
         max_angle_tol: float,
     ):
         """Run SubstrateAnalyzer and return the best match + analyzer."""
+        SubstrateAnalyzer = _get_pymatgen_types()["SubstrateAnalyzer"]
         analyzer = SubstrateAnalyzer(
             max_area_ratio_tol=0.09,
             max_area=max_area,
@@ -547,6 +562,7 @@ class InterfaceBuilder(Operation):
             max_area, max_length_tol, max_angle_tol,
         )
 
+        CoherentInterfaceBuilder = _get_pymatgen_types()["CoherentInterfaceBuilder"]
         cib = CoherentInterfaceBuilder(
             film_structure=build_film,
             substrate_structure=build_sub,
@@ -661,6 +677,7 @@ class InterfaceBuilder(Operation):
         )
 
         # ---- Interface construction --------------------------------------
+        CoherentInterfaceBuilder = _get_pymatgen_types()["CoherentInterfaceBuilder"]
         builder = CoherentInterfaceBuilder(
             film_structure=build_film,
             substrate_structure=build_sub,
@@ -797,6 +814,7 @@ class InterfaceBuilder(Operation):
             M_inv = np.linalg.inv(new_lattice.matrix)
             all_frac = [c @ M_inv for c in all_cart]
 
+            PmgStructure = _get_pymatgen_types()["PmgStructure"]
             interface = PmgStructure(
                 new_lattice, all_species, all_frac,
                 coords_are_cartesian=False,
@@ -805,6 +823,7 @@ class InterfaceBuilder(Operation):
             # No molecule preservation — just wrap atoms
             species = [site.specie for site in interface]
             frac_coords = [site.frac_coords % 1.0 for site in interface]
+            PmgStructure = _get_pymatgen_types()["PmgStructure"]
             interface = PmgStructure(interface.lattice, species, frac_coords)
 
         return interface
@@ -901,6 +920,10 @@ class InterfaceBuilder(Operation):
     @staticmethod
     def _to_pymatgen(obj: Union[Atoms, PmgStructure, Structure]) -> PmgStructure:
         """Coerce various structure types to pymatgen Structure."""
+        pmg_types = _get_pymatgen_types()
+        PmgStructure = pmg_types["PmgStructure"]
+        AseAtomsAdaptor = pmg_types["AseAtomsAdaptor"]
+
         if isinstance(obj, PmgStructure):
             return obj
         if isinstance(obj, Structure):
