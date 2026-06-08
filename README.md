@@ -13,15 +13,17 @@ A modular Python framework for building and analyzing atomic structures. Backed 
 
 ### Installation
 
-```bash
-pip install -e .
+You can simply use:
+```
+pip install matcraft-kit
 ```
 
-Or install with dev dependencies (pytest, coverage):
+For development, clone the repository and install in editable mode:
 
 ```bash
 pip install -e ".[dev]"
 ```
+
 
 ### CLI
 
