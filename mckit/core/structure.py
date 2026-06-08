@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Sequence, Union
 import numpy as np
 from ase import Atom, Atoms
 
-from mmkit.core.lattice import Lattice
+from mckit.core.lattice import Lattice
 
 
 # 1 amu/Å³ in g/cm³

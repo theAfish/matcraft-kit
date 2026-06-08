@@ -17,8 +17,8 @@ from typing import List, Tuple
 
 import numpy as np
 
-from mmkit.core.structure import Structure
-from mmkit.core.tool import Observation
+from mckit.core.structure import Structure
+from mckit.core.tool import Observation
 
 
 @dataclass
@@ -111,8 +111,8 @@ def _cmd_check(args):
     """CLI handler: fundamental geometric validation."""
     import json
     import sys
-    from mmkit.io import read_structure
-    from mmkit.core.structure import Structure
+    from mckit.io import read_structure
+    from mckit.core.structure import Structure
 
     atoms = read_structure(args.input)
     structure = Structure.from_ase_atoms(atoms)

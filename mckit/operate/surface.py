@@ -27,9 +27,9 @@ import numpy as np
 from ase import Atoms
 from ase.build import surface as ase_surface
 
-from mmkit.core.structure import Structure
-from mmkit.core.tool import Operation
-from mmkit.io.writer import write_atoms
+from mckit.core.structure import Structure
+from mckit.core.tool import Operation
+from mckit.io.writer import write_atoms
 
 
 def _get_pymatgen_types():
@@ -797,7 +797,7 @@ class SurfaceBuilder(Operation):
         Delegates to :func:`matmod.io.reader.read_structure`, which already
         chooses pymatgen's ``CifParser`` for ``.cif`` and ASE otherwise.
         """
-        from mmkit.io.reader import read_structure
+        from mckit.io.reader import read_structure
         from pymatgen.io.ase import AseAtomsAdaptor
 
         return AseAtomsAdaptor().get_structure(read_structure(path))

@@ -1,4 +1,4 @@
-# mmkit — Materials Modelling Toolkit
+# mckit — Materials Modelling Toolkit
 
 A modular Python framework for building and analyzing periodic atomic crystal structures. Backed by [ASE](https://wiki.fysik.dtu.dk/ase/) and [pymatgen](https://pymatgen.org/) for materials modelling.
 
@@ -27,9 +27,9 @@ pip install -e ".[dev]"
 
 ```bash
 # for observations:
-mmkit observe -h
+mckit observe -h
 # for operations:
-mmkit operate -h
+mckit operate -h
 ```
 
 
@@ -62,7 +62,7 @@ pip install -e ".[dev]"
 ### Project Structure
 
 ```
-mmkit/
+mckit/
 ├── __init__.py              # Package root — exports public API
 ├── core/
 │   ├── lattice.py           # Lattice dataclass (3×3 matrix, ASE Cell-backed)
@@ -86,7 +86,7 @@ The framework follows an **Operation / Observation** pattern:
 - **`Operation`** (abstract) — tools that **build or modify** structures. Subclasses implement `apply(...)` and return a `Structure`.
 - **`Observation`** (abstract) — tools that **inspect** structures without modifying them. Subclasses implement `observe(structure) → Any`.
 
-Both are single-method ABCs defined in `mmkit.core.tool`, making it straightforward to add new operations or observations.
+Both are single-method ABCs defined in `mckit.core.tool`, making it straightforward to add new operations or observations.
 
 **Core data flow:**
 
@@ -105,16 +105,16 @@ pytest
 With coverage:
 
 ```bash
-pytest --cov=mmkit --cov-report=term-missing
+pytest --cov=mckit --cov-report=term-missing
 ```
 
 ### Adding a New Operation
 
-Create a file under `mmkit/operate/` and subclass `Operation`:
+Create a file under `mckit/operate/` and subclass `Operation`:
 
 ```python
-from mmkit.core.structure import Structure
-from mmkit.core.tool import Operation
+from mckit.core.structure import Structure
+from mckit.core.tool import Operation
 
 class MyBuilder(Operation):
     """Build or modify a structure."""
@@ -124,15 +124,15 @@ class MyBuilder(Operation):
         return new_structure
 ```
 
-Then re-export it from `mmkit/operate/__init__.py`.
+Then re-export it from `mckit/operate/__init__.py`.
 
 ### Adding a New Observation
 
-Create a file under `mmkit/observe/` and subclass `Observation`:
+Create a file under `mckit/observe/` and subclass `Observation`:
 
 ```python
-from mmkit.core.structure import Structure
-from mmkit.core.tool import Observation
+from mckit.core.structure import Structure
+from mckit.core.tool import Observation
 
 class MyAnalysis(Observation):
     """Inspect a structure and return results."""
@@ -142,7 +142,7 @@ class MyAnalysis(Observation):
         return result_dict
 ```
 
-Then re-export it from `mmkit/observe/__init__.py`.
+Then re-export it from `mckit/observe/__init__.py`.
 
 ### Building the Package
 

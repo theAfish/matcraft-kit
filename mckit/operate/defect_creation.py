@@ -35,8 +35,8 @@ import numpy as np
 
 from ase import Atoms
 
-from mmkit.core.structure import Structure
-from mmkit.core.tool import Operation
+from mckit.core.structure import Structure
+from mckit.core.tool import Operation
 
 if TYPE_CHECKING:
     from pymatgen.core.structure import Structure as PmgStructure
@@ -470,7 +470,7 @@ class InterstitialCreator(_DefectCreator):
 def _resolve_input(path_or_atoms) -> Atoms:
     """Resolve an input to ``ase.Atoms`` (from file path or Atoms object)."""
     if isinstance(path_or_atoms, str):
-        from mmkit.io import read_structure
+        from mckit.io import read_structure
         return read_structure(path_or_atoms)
     if isinstance(path_or_atoms, Atoms):
         return path_or_atoms
@@ -554,7 +554,7 @@ def _cmd_list_defects(creator, args):
 def _cmd_create_defect(creator, args, extra_kwargs=None):
     """Shared handler for ``create`` subcommands."""
     from pathlib import Path
-    from mmkit.io import read_structure, write_atoms
+    from mckit.io import read_structure, write_atoms
 
     atoms = read_structure(args.input)
     kwargs = extra_kwargs or {}
@@ -857,7 +857,7 @@ def _build_creator_for_defect_type(args):
 def _cmd_enumerate(args):
     """Symmetry-unique enumeration and optional single-defect creation."""
     from pathlib import Path
-    from mmkit.io import read_structure, write_atoms
+    from mckit.io import read_structure, write_atoms
 
     creator, kwargs = _build_creator_for_defect_type(args)
     atoms = read_structure(args.input)
@@ -884,7 +884,7 @@ def _cmd_enumerate(args):
 def _cmd_populate(args):
     """Populate a structure with single-type or mixed defect populations."""
     from pathlib import Path
-    from mmkit.io import read_structure, write_atoms
+    from mckit.io import read_structure, write_atoms
 
     atoms = read_structure(args.input)
     target_count = _resolve_target_count(args, len(atoms))

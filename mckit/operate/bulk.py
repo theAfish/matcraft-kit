@@ -12,8 +12,8 @@ from typing import Optional, Sequence
 
 from ase.build import bulk as ase_bulk
 
-from mmkit.core.structure import Structure
-from mmkit.core.tool import Operation
+from mckit.core.structure import Structure
+from mckit.core.tool import Operation
 
 
 class BulkBuilder(Operation):
@@ -109,7 +109,7 @@ class BulkBuilder(Operation):
 
 def _cmd_build(args):
     """CLI handler: build a bulk crystal."""
-    from mmkit.io import write_atoms
+    from mckit.io import write_atoms
 
     builder = BulkBuilder()
     kwargs = dict(structure_type=args.type, a=args.a)

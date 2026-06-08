@@ -20,8 +20,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from mmkit.core.structure import Structure
-from mmkit.core.tool import Observation
+from mckit.core.structure import Structure
+from mckit.core.tool import Observation
 
 
 # ---------------------------------------------------------------------------
@@ -667,7 +667,7 @@ class StructureInfo(Observation):
 def _cmd_info(args):
     """CLI handler: print structure info."""
     import json
-    from mmkit.io import read_structure
+    from mckit.io import read_structure
 
     atoms = read_structure(args.input)
     structure = Structure.from_ase_atoms(atoms)

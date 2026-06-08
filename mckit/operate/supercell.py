@@ -8,8 +8,8 @@ import numpy as np
 from ase import Atoms
 from ase.build import make_supercell
 
-from mmkit.core.structure import Structure
-from mmkit.core.tool import Operation
+from mckit.core.structure import Structure
+from mckit.core.tool import Operation
 
 # Type alias for structure-like inputs
 StructureLike = Union[Atoms, Structure, "PmgStructure"]
@@ -152,7 +152,7 @@ def _cmd_build(args):
     """CLI handler: build a supercell from a structure file."""
     from pathlib import Path
 
-    from mmkit.io import read_structure, write_atoms
+    from mckit.io import read_structure, write_atoms
 
     atoms = read_structure(args.input)
 

@@ -8,7 +8,7 @@ from typing import Optional, Union
 from ase import Atoms
 from ase.io import write as ase_write
 
-from mmkit.core.structure import Structure
+from mckit.core.structure import Structure
 
 
 def write_structure(

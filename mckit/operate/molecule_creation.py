@@ -25,8 +25,8 @@ import numpy as np
 from ase import Atoms
 from ase.build import molecule as ase_molecule
 
-from mmkit.core.structure import Structure
-from mmkit.core.tool import Operation
+from mckit.core.structure import Structure
+from mckit.core.tool import Operation
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +177,7 @@ def fibonacci_sphere(radius: float, n_points: int) -> list[list[float]]:
 
 def _cmd_from_ase(args):
     """CLI handler: build a molecule from the ASE database."""
-    from mmkit.io import write_atoms
+    from mckit.io import write_atoms
 
     builder = ASEMoleculeBuilder()
     structure = builder.apply(name=args.name)
@@ -188,7 +188,7 @@ def _cmd_from_ase(args):
 
 def _cmd_from_smiles(args):
     """CLI handler: build a molecule from a SMILES string."""
-    from mmkit.io import write_atoms
+    from mckit.io import write_atoms
 
     builder = SMILESMoleculeBuilder()
     kwargs = dict(smiles=args.smiles, vacuum=args.vacuum)

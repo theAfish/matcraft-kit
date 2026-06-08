@@ -3,9 +3,9 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mmkit"
+name = "matcraft-kit"
 version = "0.1.0"
-description = "Materials Modelling Toolkit"
+description = "MatCraft Toolkit"
 requires-python = ">=3.9"
 dependencies = [
     "numpy>=1.21",
@@ -19,6 +19,6 @@ dependencies = [
 dev = ["pytest", "pytest-cov"]
 
 [project.scripts]
-mmkit = "mmkit.cli:main"
+mckit = "mckit.cli:main"
 
 

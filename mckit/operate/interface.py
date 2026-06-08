@@ -19,8 +19,8 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 from ase import Atoms
 
-from mmkit.core.structure import Structure
-from mmkit.core.tool import Operation
+from mckit.core.structure import Structure
+from mckit.core.tool import Operation
 
 
 def _get_pymatgen_types():
@@ -446,7 +446,7 @@ class InterfaceBuilder(Operation):
         templates: List[Dict] = []
 
         if preserve_molecules:
-            from mmkit.operate.surface import MoleculeDetector
+            from mckit.operate.surface import MoleculeDetector
 
             detector = MoleculeDetector(tol=mol_tol, min_size=mol_min_size)
             molecules = detector.detect(bulk_pmg)
@@ -992,7 +992,7 @@ def _cmd_list(args) -> None:
     """CLI handler: list all interface terminations."""
     import json
 
-    from mmkit.io.reader import read_structure
+    from mckit.io.reader import read_structure
 
     film = read_structure(args.film)
     substrate = read_structure(args.substrate)
@@ -1078,8 +1078,8 @@ def _cmd_build(args):
     """CLI handler: build a coherent interface."""
     from pathlib import Path
 
-    from mmkit.io.reader import read_structure
-    from mmkit.io.writer import write_structure
+    from mckit.io.reader import read_structure
+    from mckit.io.writer import write_structure
 
     film_atoms = read_structure(args.film)
     substrate_atoms = read_structure(args.substrate)

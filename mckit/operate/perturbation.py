@@ -7,8 +7,8 @@ from typing import Optional, Sequence, Union
 import numpy as np
 from ase import Atoms
 
-from mmkit.core.structure import Structure
-from mmkit.core.tool import Operation
+from mckit.core.structure import Structure
+from mckit.core.tool import Operation
 
 # Type alias for structure-like inputs
 StructureLike = Union[Atoms, Structure, "PmgStructure"]
@@ -429,7 +429,7 @@ def _cmd_perturb(args):
     """CLI handler: perturb a structure and write the result."""
     from pathlib import Path
 
-    from mmkit.io import read_structure, write_structure
+    from mckit.io import read_structure, write_structure
 
     atoms = read_structure(args.input)
 
@@ -459,7 +459,7 @@ def _cmd_batch(args):
     """CLI handler: generate a batch of perturbed structures."""
     from pathlib import Path
 
-    from mmkit.io import read_structure, write_structure
+    from mckit.io import read_structure, write_structure
 
     atoms = read_structure(args.input)
 
