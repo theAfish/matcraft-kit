@@ -615,124 +615,6 @@ def _cmd_create_defect(creator, args, extra_kwargs=None):
     print(f"  {len(atoms)} -> {len(current_atoms)} atoms  -> {path}")
 
 
-def _cmd_mixed(args):
-    """Create a blended defect population with weighted defect types."""
-    from pathlib import Path
-    from mmkit.io import read_structure, write_atoms
-
-    atoms = read_structure(args.input)
-    target_count = _resolve_target_count(args, len(atoms))
-    rng = random.Random(args.seed)
-
-    types = args.mix_types
-    if args.mix_weights is not None and len(args.mix_weights) != len(types):
-        raise ValueError("--mix-weights must have the same length as --mix-types.")
-
-    type_weights = {
-        t: (args.mix_weights[i] if args.mix_weights is not None else 1.0)
-        for i, t in enumerate(types)
-    }
-
-    substitution = None
-    if "substitution" in types:
-        if not args.substitution:
-            raise ValueError("Mixed mode requires --substitution when substitution is enabled.")
-        substitution = _parse_substitution_arg(args.substitution)
-
-    if "interstitial" in types and not args.species_list:
-        raise ValueError("Mixed mode requires --species when interstitial is enabled.")
-
-    if args.mode == "fast":
-        result_atoms, sequence, type_counts = _apply_mixed_fast(
-            atoms=atoms,
-            types=types,
-            type_weights=type_weights,
-            target_count=target_count,
-            substitution=substitution,
-            species_list=args.species_list,
-            min_dist=args.min_dist,
-            seed=args.seed,
-            max_trials=args.max_trials,
-        )
-        stem = Path(args.input).stem
-        output = args.output or f"{stem}_mixed_{len(sequence)}defects_fast.extxyz"
-        path = write_atoms(output, result_atoms)
-        print(
-            f"Created mixed defects (fast mode): {len(sequence)} applied "
-            f"(requested {target_count})."
-        )
-        for defect_type in types:
-            print(f"  {defect_type:12s}: {type_counts[defect_type]}")
-        preview = ", ".join(sequence[:8])
-        if preview:
-            tail = " ..." if len(sequence) > 8 else ""
-            print(f"  sequence: {preview}{tail}")
-        print(f"  {len(atoms)} -> {len(result_atoms)} atoms  -> {path}")
-        return
-
-    creators = {
-        "vacancy": (VacancyCreator(symprec=args.symprec), {}),
-        "substitution": (
-            SubstitutionCreator(symprec=args.symprec),
-            {"substitution": substitution} if substitution is not None else {},
-        ),
-        "antisite": (AntiSiteCreator(symprec=args.symprec), {}),
-        "interstitial": (
-            InterstitialCreator(min_dist=args.min_dist),
-            {"species": args.species_list} if args.species_list else {},
-        ),
-    }
-
-    current_atoms = atoms
-    sequence: list[str] = []
-    type_counts = {t: 0 for t in types}
-
-    for _ in range(target_count):
-        candidates = []
-        for defect_type in types:
-            creator, kwargs = creators[defect_type]
-            names = creator.list_defects(current_atoms, **kwargs)
-            if names:
-                candidates.append((defect_type, creator, kwargs, names))
-
-        if not candidates:
-            break
-
-        selected = rng.choices(
-            candidates,
-            weights=[type_weights[c[0]] for c in candidates],
-            k=1,
-        )[0]
-        defect_type, creator, kwargs, names = selected
-        index = rng.randrange(len(names))
-        name = names[index]
-
-        current_atoms = creator.apply(
-            structure=current_atoms, index=index, **kwargs,
-        ).atoms
-        type_counts[defect_type] += 1
-        sequence.append(f"{defect_type}:{name}")
-
-    if not sequence:
-        raise ValueError("No defects could be generated for the provided mixed setup.")
-
-    stem = Path(args.input).stem
-    output = args.output or f"{stem}_mixed_{len(sequence)}defects.extxyz"
-    path = write_atoms(output, current_atoms)
-
-    print(
-        f"Created mixed defects: {len(sequence)} applied "
-        f"(requested {target_count})."
-    )
-    for defect_type in types:
-        print(f"  {defect_type:12s}: {type_counts[defect_type]}")
-    preview = ", ".join(sequence[:8])
-    if preview:
-        tail = " ..." if len(sequence) > 8 else ""
-        print(f"  sequence: {preview}{tail}")
-    print(f"  {len(atoms)} -> {len(current_atoms)} atoms  -> {path}")
-
-
 def _apply_mixed_fast(
     *,
     atoms: Atoms,
@@ -1006,7 +888,6 @@ def _cmd_populate(args):
 
     atoms = read_structure(args.input)
     target_count = _resolve_target_count(args, len(atoms))
-    rng = random.Random(args.seed)
 
     raw_weights = {
         "vacancy": args.vacancy_weight,
@@ -1040,75 +921,28 @@ def _cmd_populate(args):
     if "interstitial" in types and not args.species_list:
         raise ValueError("populate requires --species when interstitial is enabled.")
 
-    if args.mode == "fast":
-        result_atoms, sequence, type_counts = _apply_mixed_fast(
-            atoms=atoms,
-            types=types,
-            type_weights=type_weights,
-            target_count=target_count,
-            substitution=substitution,
-            species_list=args.species_list,
-            min_dist=args.min_dist,
-            seed=args.seed,
-            max_trials=args.max_trials,
-        )
-    else:
-        creators = {
-            "vacancy": (VacancyCreator(symprec=args.symprec), {}),
-            "substitution": (
-                SubstitutionCreator(symprec=args.symprec),
-                {"substitution": substitution} if substitution is not None else {},
-            ),
-            "antisite": (AntiSiteCreator(symprec=args.symprec), {}),
-            "interstitial": (
-                InterstitialCreator(min_dist=args.min_dist),
-                {"species": args.species_list} if args.species_list else {},
-            ),
-        }
-
-        current_atoms = atoms
-        sequence: list[str] = []
-        type_counts = {t: 0 for t in types}
-
-        for _ in range(target_count):
-            candidates = []
-            for defect_type in types:
-                creator, kwargs = creators[defect_type]
-                names = creator.list_defects(current_atoms, **kwargs)
-                if names:
-                    candidates.append((defect_type, creator, kwargs, names))
-
-            if not candidates:
-                break
-
-            selected = rng.choices(
-                candidates,
-                weights=[type_weights[c[0]] for c in candidates],
-                k=1,
-            )[0]
-            defect_type, creator, kwargs, names = selected
-            index = rng.randrange(len(names))
-            name = names[index]
-
-            current_atoms = creator.apply(
-                structure=current_atoms, index=index, **kwargs,
-            ).atoms
-            type_counts[defect_type] += 1
-            sequence.append(f"{defect_type}:{name}")
-
-        result_atoms = current_atoms
+    result_atoms, sequence, type_counts = _apply_mixed_fast(
+        atoms=atoms,
+        types=types,
+        type_weights=type_weights,
+        target_count=target_count,
+        substitution=substitution,
+        species_list=args.species_list,
+        min_dist=args.min_dist,
+        seed=args.seed,
+        max_trials=args.max_trials,
+    )
 
     if not sequence:
         raise ValueError("No defects could be generated for this populate setup.")
 
     stem = Path(args.input).stem
-    suffix = "fast" if args.mode == "fast" else "sym"
-    output = args.output or f"{stem}_populate_{len(sequence)}_{suffix}.extxyz"
+    output = args.output or f"{stem}_populate_{len(sequence)}_fast.extxyz"
     path = write_atoms(output, result_atoms)
 
     print(
         f"Created defect population: {len(sequence)} applied "
-        f"(requested {target_count}; mode={args.mode})."
+        f"(requested {target_count})."
     )
     for defect_type in types:
         print(f"  {defect_type:12s}: {type_counts[defect_type]}")
@@ -1184,16 +1018,8 @@ def _register_defect_commands(defect_sub):
         help="Required when --interstitial is set",
     )
     pop.add_argument(
-        "--symprec", type=float, default=0.01,
-        help="Symmetry precision for symmetry mode (default: 0.01)",
-    )
-    pop.add_argument(
         "--min-dist", type=float, default=0.9,
         help="Minimum distance to existing atoms for interstitials (default: 0.9 A)",
-    )
-    pop.add_argument(
-        "--mode", choices=["fast", "symmetry"], default="fast",
-        help="Defect engine: fast (MD-scale) or symmetry (DFT-like)",
     )
     pop.add_argument(
         "--max-trials", type=int, default=500,
