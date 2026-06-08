@@ -25,6 +25,6 @@ Tasks dedicated to analyzing structural properties and verifying geometry.
 
 ---
 
-> **Critical Workflow Rule:** Always run a sanity check after any structural modification using:
-> `mckit observe basic_check [<structure_file>]`
+> **Critical Workflow Rule:** Always check the structure after any structural modification using:
+> `mckit observe info [<structure_file>]`
 > *Never rely solely on intuition—always verify structural integrity programmatically.*
