@@ -1,6 +1,6 @@
-# mckit — Materials Modelling Toolkit
+# mckit — MatCraft Toolkit
 
-A modular Python framework for building and analyzing periodic atomic crystal structures. Backed by [ASE](https://wiki.fysik.dtu.dk/ase/) and [pymatgen](https://pymatgen.org/) for materials modelling.
+A modular Python framework for building and analyzing atomic structures. Backed by [ASE](https://wiki.fysik.dtu.dk/ase/) and [pymatgen](https://pymatgen.org/) for materials modelling.
 
 ## Features
 

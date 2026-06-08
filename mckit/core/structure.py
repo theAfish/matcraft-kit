@@ -103,9 +103,12 @@ class Structure:
         return float(self._atoms.get_masses().sum())
 
     @property
-    def density(self) -> float:
-        """Mass density (g/cm³)."""
-        return self.total_mass * _AMU_PER_A3_TO_G_PER_CM3 / self.volume
+    def density(self) -> Optional[float]:
+        """Mass density (g/cm³).  ``None`` when the cell has zero volume."""
+        vol = self.volume
+        if vol < 1e-10:
+            return None
+        return self.total_mass * _AMU_PER_A3_TO_G_PER_CM3 / vol
 
     @property
     def composition(self) -> Dict[str, int]:
@@ -157,4 +160,6 @@ class Structure:
 
     def __repr__(self) -> str:
         comp_str = " ".join(f"{s}{n}" for s, n in self.composition.items())
-        return f"Structure({comp_str}, natoms={self.num_atoms}, V={self.volume:.2f} A^3)"
+        vol = self.volume
+        vol_str = f"{vol:.2f}" if vol > 1e-10 else "0 (no cell)"
+        return f"Structure({comp_str}, natoms={self.num_atoms}, V={vol_str} A^3)"

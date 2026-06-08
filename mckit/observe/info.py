@@ -84,17 +84,21 @@ class BasicInfo(InfoSection):
         structure: Structure,
         all_info: Optional[Dict[str, Any]] = None,
     ) -> None:
-        lat = info["lattice"]
+        has_cell = info["volume"] > 1e-10
         print("[basic]")
-        print(f"  Lattice : a={lat['a']:.4f}  b={lat['b']:.4f}  c={lat['c']:.4f} A")
-        print(f"            alpha={lat['alpha']:.2f}  beta={lat['beta']:.2f}  gamma={lat['gamma']:.2f}")
-        # print(f"  Volume  : {info['volume']:.4f} A^3")
+        if has_cell:
+            lat = info["lattice"]
+            print(f"  Lattice : a={lat['a']:.4f}  b={lat['b']:.4f}  c={lat['c']:.4f} A")
+            print(f"            alpha={lat['alpha']:.2f}  beta={lat['beta']:.2f}  gamma={lat['gamma']:.2f}")
+        else:
+            print("  Lattice : (no cell -- isolated atoms)")
         print(f"  Atoms   : {info['num_atoms']}")
         print(f"  Comp.   : {info['composition']}")
-        print(f"  Density : {info['density_g_cm3']:.4f} g/cm3")
+        if has_cell:
+            print(f"  Density : {info['density_g_cm3']:.4f} g/cm3")
 
-        # Show classification if available
-        if all_info and "vacuum" in all_info:
+        # Show classification if available (only meaningful with a cell)
+        if has_cell and all_info and "vacuum" in all_info:
             vac_info = all_info["vacuum"]
             classification = vac_info.get("classification", "")
             threshold = vac_info.get("threshold", 3.0)
