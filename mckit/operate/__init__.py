@@ -36,7 +36,10 @@ def __getattr__(name):
     if name == "SupercellBuilder":
         from mckit.operate.supercell import SupercellBuilder
         return SupercellBuilder
-    if name in ("SurfaceBuilder", "TerminationAnalyzer", "MoleculeDetector", "MoleculeRepair", "Termination"):
+    if name in ("SurfaceBuilder", "TerminationAnalyzer", "MoleculeRepair", "Termination"):
         from mckit.operate import surface
         return getattr(surface, name)
+    if name == "MoleculeDetector":
+        from mckit.operate.molecule_utils import MoleculeDetector
+        return MoleculeDetector
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

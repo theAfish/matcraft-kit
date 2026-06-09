@@ -105,6 +105,116 @@ class BasicInfo(InfoSection):
             print(f"  Class.  : {classification} (vacuum threshold {threshold:.1f} A)")
 
 
+class MoleculeInfo(InfoSection):
+    """Molecular fragments detected by non-metal connectivity."""
+
+    key = "molecules"
+
+    def __init__(self, tol: float = 0.45, min_size: int = 2) -> None:
+        self.tol = tol
+        self.min_size = min_size
+
+    @staticmethod
+    def _composition_key(composition: Dict[str, int]) -> Tuple[Tuple[str, int], ...]:
+        return tuple(sorted(composition.items()))
+
+    @staticmethod
+    def _format_formula(composition: Dict[str, int]) -> str:
+        parts = []
+        for elem in sorted(composition):
+            count = composition[elem]
+            parts.append(elem if count == 1 else f"{elem}{count}")
+        return "".join(parts)
+
+    def observe(self, structure: Structure) -> Dict[str, Any]:
+        try:
+            from mckit.operate.molecule_utils import MoleculeDetector, pbc_center
+        except ImportError as exc:
+            return {
+                "available": False,
+                "reason": str(exc),
+                "num_molecules": 0,
+                "molecules": [],
+                "types": [],
+            }
+
+        try:
+            bulk = structure.to_pymatgen()
+            detected = MoleculeDetector(tol=self.tol, min_size=self.min_size).detect(bulk)
+        except ImportError as exc:
+            return {
+                "available": False,
+                "reason": str(exc),
+                "num_molecules": 0,
+                "molecules": [],
+                "types": [],
+            }
+
+        symbols = structure.symbols
+
+        molecules: List[Dict[str, Any]] = []
+        type_counts: Counter = Counter()
+        for mol in detected:
+            indices = sorted(int(i) for i in mol)
+            composition = dict(Counter(symbols[i] for i in indices))
+            center = pbc_center(bulk, indices)
+            key = self._composition_key(composition)
+            type_counts[key] += 1
+            molecules.append({
+                "indices": indices,
+                "num_atoms": len(indices),
+                "composition": composition,
+                "formula": self._format_formula(composition),
+                "center_frac": [round(float(x), 4) for x in center],
+            })
+
+        types = []
+        for comp_key, count in type_counts.items():
+            composition = dict(comp_key)
+            types.append({
+                "formula": self._format_formula(composition),
+                "composition": composition,
+                "count": int(count),
+            })
+
+        types.sort(key=lambda item: (item["formula"], item["count"]))
+        return {
+            "available": True,
+            "num_molecules": len(molecules),
+            "num_molecular_atoms": sum(mol["num_atoms"] for mol in molecules),
+            "types": types,
+            "molecules": molecules,
+            "tol": self.tol,
+            "min_size": self.min_size,
+        }
+
+    def print_section(
+        self,
+        info: Dict[str, Any],
+        structure: Structure,
+        all_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        if not info.get("available", True):
+            print("[Molecules]")
+            print(f"  Detection unavailable: {info.get('reason', 'unknown error')}")
+            return
+
+        if info.get("num_molecules", 0) == 0:
+            return
+
+        print("[Molecules detected]")
+        print(f"  Total : {info['num_molecules']} molecule(s), "
+              f"{info['num_molecular_atoms']} atoms")
+        print("  Types :")
+        for item in info.get("types", []):
+            print(f"    {item['formula']}: {item['count']} molecule(s), "
+                  f"{item['composition']}")
+        print("  Centers:")
+        for i, mol in enumerate(info.get("molecules", [])):
+            print(f"    {mol['formula']}: {mol['num_atoms']} atoms, "
+                  f"center(frac)={mol['center_frac']}")
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers for multi-direction vacuum/slab analysis
 # ---------------------------------------------------------------------------
@@ -314,6 +424,46 @@ def _detect_layers(
     return layers
 
 
+def _molecule_aware_region_compositions(
+    regions: List[List[int]],
+    symbols: List[str],
+    molecule_info: Optional[Dict[str, Any]],
+) -> List[Dict[str, int]]:
+    """Collapse detected molecular atoms into formula units for print output."""
+    compositions = [Counter(symbols[i] for i in region) for region in regions]
+    if not molecule_info or not molecule_info.get("available", True):
+        return [dict(comp) for comp in compositions]
+
+    molecules = molecule_info.get("molecules", [])
+    if not molecules:
+        return [dict(comp) for comp in compositions]
+
+    region_sets = [set(region) for region in regions]
+    for mol in molecules:
+        mol_indices = set(int(i) for i in mol.get("indices", []))
+        if not mol_indices:
+            continue
+
+        overlaps = [len(region & mol_indices) for region in region_sets]
+        best_overlap = max(overlaps) if overlaps else 0
+        if best_overlap == 0:
+            continue
+
+        best_region = int(np.argmax(overlaps))
+        for ri, region in enumerate(region_sets):
+            for atom_idx in region & mol_indices:
+                sym = symbols[atom_idx]
+                compositions[ri][sym] -= 1
+                if compositions[ri][sym] <= 0:
+                    del compositions[ri][sym]
+
+        formula = mol.get("formula")
+        if formula:
+            compositions[best_region][f"[{formula}]"] += 1
+
+    return [dict(comp) for comp in compositions]
+
+
 def _classify(directions: Dict[str, Dict[str, Any]]) -> str:
     """Heuristic classification based on vacuum across all directions."""
     vacuum_dirs = [d for d in _DIRECTION_LABELS
@@ -477,10 +627,12 @@ class SlabCompositionInfo(InfoSection):
         directions: Optional[List[str]] = None,
         layer_tolerance: float = 2.0,
         show_layers: bool = True,
+        show_bulk_layers: bool = False,
     ) -> None:
         self.threshold = threshold
         self.layer_tolerance = layer_tolerance
         self.show_layers = show_layers
+        self.show_bulk_layers = show_bulk_layers
         self._check_dirs = set(directions) if directions else set(_DIRECTION_LABELS)
 
     def observe(self, structure: Structure) -> Dict[str, Any]:
@@ -501,8 +653,9 @@ class SlabCompositionInfo(InfoSection):
             slabs, _, vac_mask, _ = _detect_vacuum_1d(
                 cart_pos, normal, height, self.threshold
             )
+            has_direction_vacuum = bool(vac_mask.any())
 
-            if vac_mask.any():
+            if has_direction_vacuum:
                 result["has_vacuum"] = True
 
             # Projected coordinates for extent calculation
@@ -514,6 +667,7 @@ class SlabCompositionInfo(InfoSection):
                 slab_proj = proj[idx_list]
                 entry: Dict[str, Any] = {
                     "num_atoms": len(idx_list),
+                    "atom_indices": [int(i) for i in idx_list],
                     "composition": dict(Counter(slab_symbols)),
                     "extent_A": (
                         round(float(slab_proj.min()), 4),
@@ -533,6 +687,7 @@ class SlabCompositionInfo(InfoSection):
                         ext_max = round(float(layer_lin_proj.max()), 4)
                         layer_list.append({
                             "num_atoms": len(layer_idx),
+                            "atom_indices": [int(i) for i in layer_idx],
                             "composition": dict(Counter(layer_symbols)),
                             "extent_A": (ext_min, ext_max),
                             "center_A": round((ext_min + ext_max) / 2, 4),
@@ -558,6 +713,7 @@ class SlabCompositionInfo(InfoSection):
                 "slabs": slab_info,
                 "element_distribution": element_dist,
                 "cell_height_A": round(height, 4),
+                "has_vacuum": has_direction_vacuum,
             }
 
         return result
@@ -571,9 +727,19 @@ class SlabCompositionInfo(InfoSection):
         if not info.get("directions"):
             return
 
+        molecule_info = all_info.get("molecules") if all_info else None
+        symbols = structure.symbols
+
         for label, dinfo in info["directions"].items():
+            if not dinfo.get("has_vacuum", False) and not self.show_bulk_layers:
+                continue
+
             slabs = dinfo["slabs"]
             n_slabs = len(slabs)
+            slab_regions = [slab.get("atom_indices", []) for slab in slabs]
+            slab_compositions = _molecule_aware_region_compositions(
+                slab_regions, symbols, molecule_info
+            )
 
             # Omit directions with no interesting structure — a single
             # region with ≤1 layer adds nothing beyond [basic].
@@ -594,18 +760,22 @@ class SlabCompositionInfo(InfoSection):
                 print(f"  Slab {i}: {slab['num_atoms']} atoms, "
                       f"extent=[{ext_min:.2f}, {ext_max:.2f}] A, "
                       f"{ext_max - ext_min:.2f} A thick")
-                print(f"    Comp. : {slab['composition']}")
+                print(f"    Comp. : {slab_compositions[i]}")
 
                 # Per-layer breakdown
                 layers = slab.get("layers", [])
                 if self.show_layers and len(layers) > 1:
+                    layer_regions = [layer.get("atom_indices", []) for layer in layers]
+                    layer_compositions = _molecule_aware_region_compositions(
+                        layer_regions, symbols, molecule_info
+                    )
                     print(f"    Layers ({len(layers)}):")
                     for li, layer in enumerate(layers):
                         lmin, lmax = layer["extent_A"]
                         print(f"      Layer {li}: {layer['num_atoms']:>3d} atoms, "
                               f"z=[{lmin:.2f}, {lmax:.2f}] A, "
                               f"center={layer['center_A']:.2f} A  "
-                              f"{layer['composition']}")
+                              f"{layer_compositions[li]}")
 
             # Element distribution:
             # elem_dist = dinfo["element_distribution"]
@@ -628,12 +798,13 @@ class SlabCompositionInfo(InfoSection):
 # Default sections used when none are specified.
 _DEFAULT_SECTIONS: List[InfoSection] = [
     BasicInfo(),
+    MoleculeInfo(),
     VacuumInfo(),
     SlabCompositionInfo(),
 ]
 
 
-class StructureInfo(Observation):
+class StructureInspect(Observation):
     """Collect key information about a structure.
 
     Runs every registered :class:`InfoSection` and merges the results under
@@ -642,7 +813,8 @@ class StructureInfo(Observation):
     Parameters
     ----------
     sections
-        Sections to run.  Defaults to :class:`BasicInfo` + :class:`VacuumInfo`
+        Sections to run.  Defaults to :class:`BasicInfo`
+        + :class:`MoleculeInfo` + :class:`VacuumInfo`
         + :class:`SlabCompositionInfo`.
     """
 
@@ -677,15 +849,15 @@ def _cmd_info(args):
     structure = Structure.from_ase_atoms(atoms)
 
     if args.json:
-        info = StructureInfo().observe(structure)
+        info = StructureInspect().observe(structure)
         print(json.dumps(info, indent=2, default=str))
     else:
-        StructureInfo().print_summary(structure)
+        StructureInspect().print_summary(structure)
 
 
 def register_cli(subparsers) -> None:
-    """Register info subcommands with the mmkit CLI."""
-    p = subparsers.add_parser("info", help="Print structure information")
+    """Register inspect subcommands with the mmkit CLI."""
+    p = subparsers.add_parser("inspect", help="Print structure information")
     p.add_argument("input", help="Structure file (CIF, POSCAR, extxyz, ...)")
     p.add_argument("--json", action="store_true", help="Output as JSON")
     p.set_defaults(handler=_cmd_info)

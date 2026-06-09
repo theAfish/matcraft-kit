@@ -21,6 +21,11 @@ from ase import Atoms
 
 from mckit.core.structure import Structure
 from mckit.core.tool import Operation
+from mckit.operate.molecule_utils import (
+    MoleculeDetector,
+    build_molecule_templates,
+    create_pseudo_structure,
+)
 
 
 def _get_pymatgen_types():
@@ -81,77 +86,6 @@ def _ensure_dummy_patched() -> None:
 
     DummySpecies.__getattr__ = _patched_getattr
     _dummy_patched = True
-
-
-# ---------------------------------------------------------------------------
-# Molecule helpers
-# ---------------------------------------------------------------------------
-
-def _pbc_center(structure: PmgStructure, indices: List[int]) -> np.ndarray:
-    """PBC-aware geometric center (fractional coords)."""
-    coords = structure.frac_coords[indices].copy()
-    ref = coords[0]
-    for j in range(3):
-        diff = coords[:, j] - ref[j]
-        coords[:, j] = ref[j] + (diff + 0.5) % 1.0 - 0.5
-    return coords.mean(axis=0) % 1.0
-
-
-def _build_mol_templates(
-    bulk: PmgStructure, molecules: List[List[int]],
-) -> List[Dict]:
-    """Extract Cartesian offset templates for each detected molecule."""
-    templates = []
-    for mol in molecules:
-        center_cart = bulk.lattice.get_cartesian_coords(_pbc_center(bulk, mol))
-        offsets = []
-        species = []
-        for idx in mol:
-            cart = bulk.lattice.get_cartesian_coords(bulk.frac_coords[idx])
-            d = cart - center_cart
-            for j in range(3):
-                ll = bulk.lattice.abc[j]
-                if d[j] > ll / 2:
-                    d[j] -= ll
-                elif d[j] < -ll / 2:
-                    d[j] += ll
-            offsets.append(d)
-            species.append(str(bulk[idx].specie))
-        templates.append({
-            "offsets": np.array(offsets),
-            "species": species,
-            "center": _pbc_center(bulk, mol),
-        })
-    return templates
-
-
-def _create_pseudo_structure(
-    bulk: PmgStructure,
-    molecules: List[List[int]],
-    templates: List[Dict],
-) -> PmgStructure:
-    """Replace each molecule with a single X pseudo-atom at its center."""
-    _ensure_dummy_patched()
-    from pymatgen.core.periodic_table import DummySpecies
-
-    PmgStructure = _get_pymatgen_types()["PmgStructure"]
-
-    mol_set = set()
-    for mol in molecules:
-        mol_set.update(mol)
-
-    species = []
-    frac_coords = []
-    for i, site in enumerate(bulk):
-        if i not in mol_set:
-            species.append(site.specie)
-            frac_coords.append(site.frac_coords)
-
-    for template in templates:
-        species.append(DummySpecies(_PSEUDO_SYMBOL))
-        frac_coords.append(template["center"])
-
-    return PmgStructure(bulk.lattice, species, frac_coords)
 
 
 # ---------------------------------------------------------------------------
@@ -446,15 +380,13 @@ class InterfaceBuilder(Operation):
         templates: List[Dict] = []
 
         if preserve_molecules:
-            from mckit.operate.surface import MoleculeDetector
-
             detector = MoleculeDetector(tol=mol_tol, min_size=mol_min_size)
             molecules = detector.detect(bulk_pmg)
             if molecules:
-                templates = _build_mol_templates(bulk_pmg, molecules)
+                templates = build_molecule_templates(bulk_pmg, molecules)
 
         if molecules:
-            build_pmg = _create_pseudo_structure(bulk_pmg, molecules, templates)
+            build_pmg = create_pseudo_structure(bulk_pmg, molecules, templates)
         else:
             build_pmg = bulk_pmg
 
