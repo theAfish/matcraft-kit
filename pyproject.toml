@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "matcraft-kit"
 version = "0.1.2"
 description = "MatCraft Toolkit"
+readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "numpy>=1.21",
