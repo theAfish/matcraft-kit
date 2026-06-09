@@ -16,6 +16,7 @@ __all__ = [
     "VacancyCreator",
     "MoleculeDetector",
     "MoleculeRepair",
+    "NanoCrystalBuilder",
     "LayerInfo",
     "StackMatch",
     "VdWStackBuilder",
@@ -46,6 +47,9 @@ def __getattr__(name):
     if name == "MoleculeDetector":
         from mckit.operate.molecule_utils import MoleculeDetector
         return MoleculeDetector
+    if name == "NanoCrystalBuilder":
+        from mckit.operate.nano_crystal import NanoCrystalBuilder
+        return NanoCrystalBuilder
     if name in ("LayerInfo", "StackMatch", "VdWStackBuilder", "VdWStackResult"):
         from mckit.operate import vdw_stack
         return getattr(vdw_stack, name)
