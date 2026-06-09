@@ -46,6 +46,36 @@ def _get_pymatgen_types():
     }
 
 
+def _has_overlap(
+    new_pos: np.ndarray,
+    placed: List[np.ndarray],
+    tolerance: float = 0.7,
+) -> bool:
+    """Check if a new atom overlaps with any already-placed atom.
+
+    Uses a minimum distance threshold to detect clashing positions.
+
+    Parameters
+    ----------
+    new_pos : np.ndarray
+        Cartesian position of the candidate atom.
+    placed : list of np.ndarray
+        Positions of atoms already placed in the slab.
+    tolerance : float
+        Minimum allowed distance (Angstroms).
+
+    Returns
+    -------
+    bool
+        True if overlap detected (atom would be too close).
+    """
+    for existing_pos in placed:
+        d = np.linalg.norm(new_pos - existing_pos)
+        if d < tolerance:  # Absolute minimum distance
+            return True
+    return False
+
+
 # ===================================================================
 # Termination dataclass
 # ===================================================================
@@ -438,7 +468,7 @@ class MoleculeDetector:
                 extent.append(span * bulk.lattice.abc[dim])
             max_extent = max(extent)
             cell_min = min(bulk.lattice.abc)
-            if max_extent < cell_min * 0.5:
+            if max_extent < cell_min * 0.8:
                 molecules.append(cluster)
 
         return molecules
@@ -508,7 +538,11 @@ class MoleculeRepair:
         report : dict
             Keys: kept, reconstructed, removed, n_atoms.
         """
-        templates = self._build_mol_templates()
+        # Store templates for per-fragment matching
+        self._templates = self._build_mol_templates()
+        # Compute rigid-body rotation: bulk → slab frame
+        R_bulk2slab, _ = self._compute_bulk_to_slab_transform(slab)
+
         slab_org = [
             i for i, s in enumerate(slab)
             if str(s.specie) in self.organic_elements
@@ -517,14 +551,49 @@ class MoleculeRepair:
 
         fw_min, fw_max = self._inorganic_z_bounds(slab)
 
-        decisions = []
-        for ci, mol in enumerate(slab_mols):
-            center_z = self._estimate_mol_center_cart(slab, mol)[2]
-            well_inside = (
-                center_z >= fw_min + self.margin
-                and center_z <= fw_max - self.margin
-            )
-            decisions.append((ci, center_z, well_inside, len(mol)))
+        # Build a list of all periodic images of bulk molecules
+        # Each entry: (bulk_mol_idx, image_center_cart, template_idx)
+        bulk_mol_images = []
+        for mol_idx, mol in enumerate(self.molecules):
+            mol_center_frac = self._pbc_center(self.bulk, mol)
+            mol_center_cart = self.bulk.lattice.get_cartesian_coords(mol_center_frac)
+            # Generate periodic images
+            for da in range(-2, 3):
+                for db in range(-2, 3):
+                    for dc in range(-2, 3):
+                        shift = (
+                            da * self.bulk.lattice.matrix[0]
+                            + db * self.bulk.lattice.matrix[1]
+                            + dc * self.bulk.lattice.matrix[2]
+                        )
+                        image_center = mol_center_cart + shift
+                        bulk_mol_images.append((mol_idx, image_center, mol_idx))
+
+        # Match each slab fragment to the closest bulk molecule image
+        fragment_to_bulk_image = []
+        for frag in slab_mols:
+            frag_center = self._estimate_mol_center_cart(slab, frag)
+            best_img_idx = -1
+            best_dist = float("inf")
+            for img_idx, (_mol_idx, img_center, _tmpl_idx) in enumerate(bulk_mol_images):  # noqa: F841 - _mol_idx, _tmpl_idx unused
+                d = np.linalg.norm(frag_center - img_center)
+                if d < best_dist:
+                    best_dist = d
+                    best_img_idx = img_idx
+            fragment_to_bulk_image.append((best_img_idx, best_dist))
+
+        # Group slab fragments by bulk molecule image
+        # Key: (bulk_mol_idx, image_center_tuple) to uniquely identify each image
+        image_to_fragments: Dict[Tuple, List[int]] = {}
+        image_centers: Dict[Tuple, np.ndarray] = {}
+        for frag_idx, (img_idx, dist) in enumerate(fragment_to_bulk_image):
+            if img_idx >= 0 and dist < self.mol_extent * 2:
+                mol_idx, img_center, tmpl_idx = bulk_mol_images[img_idx]  # noqa: F841 - tmpl_idx unused
+                key = (mol_idx, tuple(np.round(img_center, 3)))
+                if key not in image_to_fragments:
+                    image_to_fragments[key] = []
+                    image_centers[key] = img_center
+                image_to_fragments[key].append(frag_idx)
 
         # Start with inorganic atoms
         new_sp: List[str] = []
@@ -537,27 +606,98 @@ class MoleculeRepair:
                 )
 
         kept = reconstructed = removed = 0
-        for ci, mol in enumerate(slab_mols):
-            _, center_z, keep, n_atoms = decisions[ci]
+        # Collect positions already placed (for overlap guard)
+        placed_positions: List[np.ndarray] = list(new_cc)
+        # Track which slab fragments have been processed
+        processed_fragments: Set[int] = set()
 
-            if keep and n_atoms >= 8:
-                # Keep intact molecule
-                for idx in mol:
+        # Process each bulk molecule image
+        for image_key, frag_indices in image_to_fragments.items():
+            mol_idx = image_key[0]
+            img_center = image_centers[image_key]
+
+            # Collect all atoms from all fragments for this image
+            all_slab_atoms = []
+            for frag_idx in frag_indices:
+                all_slab_atoms.extend(slab_mols[frag_idx])
+                processed_fragments.add(frag_idx)
+
+            # Estimate center of the combined fragments
+            center_cart = self._estimate_mol_center_cart(slab, all_slab_atoms)
+            center_z = center_cart[2]
+
+            # Check if well inside the framework
+            well_inside = (
+                center_z >= fw_min + self.margin
+                and center_z <= fw_max - self.margin
+            )
+
+            if not well_inside:
+                # Surface molecule - remove it
+                removed += 1
+                continue
+
+            # Check if we have all atoms (or close to it)
+            expected_size = len(self.molecules[mol_idx])
+            actual_size = len(all_slab_atoms)
+
+            if actual_size >= expected_size * 0.8:
+                # Keep all fragment atoms (molecule is mostly intact)
+                for idx in all_slab_atoms:
                     new_sp.append(str(slab[idx].specie))
                     new_cc.append(
                         slab.lattice.get_cartesian_coords(slab.frac_coords[idx])
                     )
+                    placed_positions.append(new_cc[-1])
                 kept += 1
-            elif keep and n_atoms < 8:
-                # Reconstruct from template
-                center_cart = self._estimate_mol_center_cart(slab, mol)
-                tmpl = templates[0]
-                for spec, offset in zip(tmpl["species"], tmpl["offsets"]):
-                    new_sp.append(spec)
-                    new_cc.append(center_cart + offset)
-                reconstructed += 1
             else:
-                removed += 1
+                # Reconstruct from template
+                tmpl = self._templates[mol_idx]
+
+                # Save position before adding atoms
+                start_len = len(new_cc)
+                placed_ok = True
+                for spec, offset in zip(tmpl["species"], tmpl["offsets"]):
+                    # Rotate bulk offset into slab frame, then translate
+                    rotated_offset = R_bulk2slab @ offset
+                    new_pos = center_cart + rotated_offset
+                    # Overlap guard: skip if too close to existing atom
+                    if _has_overlap(new_pos, placed_positions):
+                        placed_ok = False
+                        break
+                    new_sp.append(spec)
+                    new_cc.append(new_pos)
+                    placed_positions.append(new_pos)
+
+                if not placed_ok:
+                    # Rollback: remove atoms added for this fragment
+                    del new_sp[start_len:]
+                    del new_cc[start_len:]
+                    del placed_positions[start_len:]
+                    removed += 1
+                else:
+                    reconstructed += 1
+
+        # Handle any unassigned fragments (not matched to any bulk molecule image)
+        for frag_idx, frag in enumerate(slab_mols):
+            if frag_idx not in processed_fragments:
+                # This fragment wasn't matched to any bulk molecule image
+                # Check if it's well inside
+                center_z = self._estimate_mol_center_cart(slab, frag)[2]
+                well_inside = (
+                    center_z >= fw_min + self.margin
+                    and center_z <= fw_max - self.margin
+                )
+                if well_inside:
+                    # Keep it
+                    for idx in frag:
+                        new_sp.append(str(slab[idx].specie))
+                        new_cc.append(
+                            slab.lattice.get_cartesian_coords(slab.frac_coords[idx])
+                        )
+                    kept += 1
+                else:
+                    removed += 1
 
         # Optionally strip inorganic atoms beyond molecular extent
         if self.strip_inorganic and kept + reconstructed > 0:
@@ -643,6 +783,162 @@ class MoleculeRepair:
                 "species": species,
             })
         return templates
+
+    @staticmethod
+    def _compute_rmsd(P: np.ndarray, Q: np.ndarray) -> float:
+        """RMSD between two (N,3) coordinate arrays."""
+        if len(P) == 0:
+            return float("inf")
+        return float(np.sqrt(np.mean(np.sum((P - Q) ** 2, axis=1))))
+
+    @staticmethod
+    def _kabsch(
+        P: np.ndarray, Q: np.ndarray,
+    ) -> np.ndarray:
+        """Kabsch algorithm: optimal rotation aligning P onto Q.
+
+        Both P and Q must be centroid-centered (N×3 arrays).
+        Returns a 3×3 rotation matrix R such that ``P @ R.T ≈ Q``.
+        """
+        H = P.T @ Q
+        U, _S, Vt = np.linalg.svd(H)  # noqa: F841 - _S intentionally unused
+        d = np.linalg.det(Vt.T @ U.T)
+        sign_matrix = np.diag([1.0, 1.0, np.sign(d)])
+        R = Vt.T @ sign_matrix @ U.T
+        return R
+
+    def _compute_bulk_to_slab_transform(
+        self, slab: PmgStructure,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Compute rotation R and translation t mapping bulk → slab frame.
+
+        Matches inorganic atoms between bulk and slab by minimum-image
+        distance, then solves for the rigid-body transform via the Kabsch
+        algorithm.
+
+        Returns ``(R, t)`` where ``cart_slab ≈ R @ cart_bulk + t``.
+        Falls back to identity / zero when no matches are found.
+        """
+        inorg_bulk_idx = []
+        inorg_bulk_el = []
+        for i, site in enumerate(self.bulk):
+            el = str(site.specie)
+            if el not in self.organic_elements:
+                inorg_bulk_idx.append(i)
+                inorg_bulk_el.append(el)
+
+        inorg_slab_idx = []
+        inorg_slab_el = []
+        for i, site in enumerate(slab):
+            el = str(site.specie)
+            if el not in self.organic_elements:
+                inorg_slab_idx.append(i)
+                inorg_slab_el.append(el)
+
+        if not inorg_bulk_idx or not inorg_slab_idx:
+            return np.eye(3), np.zeros(3)
+
+        bulk_cart = np.array([
+            self.bulk.lattice.get_cartesian_coords(
+                self.bulk.frac_coords[i],
+            )
+            for i in inorg_bulk_idx
+        ])
+        slab_cart = np.array([
+            slab.lattice.get_cartesian_coords(slab.frac_coords[i])
+            for i in inorg_slab_idx
+        ])
+
+        # Match slab inorganic atoms to nearest bulk inorganic atom
+        bulk_matched: List[np.ndarray] = []
+        slab_matched: List[np.ndarray] = []
+        max_search_r = 5.0
+
+        for s_idx in range(len(inorg_slab_idx)):
+            s_pos = slab_cart[s_idx]
+            s_el = inorg_slab_el[s_idx]
+            best_d = max_search_r
+            best_b_pos = None
+            for b_idx in range(len(inorg_bulk_idx)):
+                if inorg_bulk_el[b_idx] != s_el:
+                    continue
+                b_pos = bulk_cart[b_idx]
+                # Check periodic images of bulk position
+                for da in range(-1, 2):
+                    for db in range(-1, 2):
+                        for dc in range(-1, 2):
+                            shift = (
+                                da * self.bulk.lattice.matrix[0]
+                                + db * self.bulk.lattice.matrix[1]
+                                + dc * self.bulk.lattice.matrix[2]
+                            )
+                            image_pos = b_pos + shift
+                            d = np.linalg.norm(s_pos - image_pos)
+                            if d < best_d:
+                                best_d = d
+                                best_b_pos = image_pos
+            if best_b_pos is not None:
+                bulk_matched.append(best_b_pos)
+                slab_matched.append(s_pos)
+
+        if len(bulk_matched) < 3:
+            return np.eye(3), np.zeros(3)
+
+        bulk_arr = np.array(bulk_matched)
+        slab_arr = np.array(slab_matched)
+
+        bulk_centroid = bulk_arr.mean(axis=0)
+        slab_centroid = slab_arr.mean(axis=0)
+
+        R = self._kabsch(bulk_arr - bulk_centroid, slab_arr - slab_centroid)
+        t = slab_centroid - R @ bulk_centroid
+        return R, t
+
+    def _find_best_template(
+        self, slab: PmgStructure, mol_indices: List[int],
+    ) -> Tuple[int, float]:
+        """Find best-matching template for a fragment via heavy-atom RMSD.
+
+        Returns ``(template_index, rmsd)``.
+        """
+        heavy_elems = {"C", "N", "O", "S", "P", "F", "Cl", "Br", "I"}
+        frag_heavy = [
+            i for i in mol_indices
+            if str(slab[i].specie) in heavy_elems
+        ]
+        if not frag_heavy:
+            return 0, float("inf")
+
+        frag_coords = np.array([
+            slab.lattice.get_cartesian_coords(slab.frac_coords[i])
+            for i in frag_heavy
+        ])
+        frag_elems = [str(slab[i].specie) for i in frag_heavy]
+        frag_centroid = frag_coords.mean(axis=0)
+
+        best_idx = 0
+        best_rmsd = float("inf")
+        for t_idx, tmpl in enumerate(self._templates):
+            tmpl_heavy_mask = [
+                s in heavy_elems for s in tmpl["species"]
+            ]
+            if sum(tmpl_heavy_mask) < len(frag_heavy):
+                continue
+            tmpl_offsets_heavy = tmpl["offsets"][tmpl_heavy_mask]
+            tmpl_elems_heavy = [
+                s for s, m in zip(tmpl["species"], tmpl_heavy_mask) if m
+            ]
+            # Match element composition
+            if sorted(tmpl_elems_heavy) != sorted(frag_elems):
+                continue
+            # Align by element order
+            tmpl_centered = tmpl_offsets_heavy.copy()
+            rmsd = self._compute_rmsd(frag_coords - frag_centroid, tmpl_centered)
+            if rmsd < best_rmsd:
+                best_rmsd = rmsd
+                best_idx = t_idx
+
+        return best_idx, best_rmsd
 
     @staticmethod
     def _estimate_mol_center_cart(
