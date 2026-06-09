@@ -50,7 +50,7 @@ mckit operate -h
 ```bash
 # Clone the repository
 git clone <repo-url>
-cd mat-modelling-kit
+cd matcraft-kit
 
 # Create and activate a virtual environment
 python -m venv .venv
@@ -74,7 +74,7 @@ mckit/
 │   ├── bulk.py              # BulkBuilder — standard crystal structures
 │   └── surface.py           # SurfaceBuilder, TerminationAnalyzer, MoleculeDetector
 ├── observe/
-│   ├── info.py              # StructureInfo — structural summary
+│   ├── inspect.py              # StructureInspect — structural summary
 │   └── fundamental.py       # FundamentalCheck — geometric validity checks
 └── io/
     ├── reader.py            # read_structure() -> ASE Atoms

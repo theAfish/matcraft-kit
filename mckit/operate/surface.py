@@ -29,6 +29,7 @@ from ase.build import surface as ase_surface
 
 from mckit.core.structure import Structure
 from mckit.core.tool import Operation
+from mckit.operate.molecule_utils import MoleculeDetector, build_molecule_templates, pbc_center
 from mckit.io.writer import write_atoms
 
 
@@ -294,7 +295,7 @@ class TerminationAnalyzer:
             symbols=symbols,
             positions=positions,
             cell=new_cell,
-            pbc=[True, True, False],
+            pbc=[True, True, True],
         )
         slab.translate([0, 0, -slab.positions[:, 2].min()])
         return slab
@@ -371,7 +372,7 @@ class TerminationAnalyzer:
 # Molecule Detector
 # ===================================================================
 
-class MoleculeDetector:
+class _MoleculeDetectorLegacy:
     """Detect molecular fragments in a bulk structure via two-stage
     connectivity analysis.
 
@@ -541,7 +542,7 @@ class MoleculeRepair:
         # Store templates for per-fragment matching
         self._templates = self._build_mol_templates()
         # Compute rigid-body rotation: bulk → slab frame
-        R_bulk2slab, _ = self._compute_bulk_to_slab_transform(slab)
+        R_bulk2slab, t_bulk2slab = self._compute_bulk_to_slab_transform(slab)
 
         slab_org = [
             i for i, s in enumerate(slab)
@@ -554,19 +555,26 @@ class MoleculeRepair:
         # Build a list of all periodic images of bulk molecules
         # Each entry: (bulk_mol_idx, image_center_cart, template_idx)
         bulk_mol_images = []
+        image_ranges = [
+            range(
+                -int(np.ceil(slab.lattice.abc[i] / self.bulk.lattice.abc[i])) - 3,
+                int(np.ceil(slab.lattice.abc[i] / self.bulk.lattice.abc[i])) + 4,
+            )
+            for i in range(3)
+        ]
         for mol_idx, mol in enumerate(self.molecules):
             mol_center_frac = self._pbc_center(self.bulk, mol)
             mol_center_cart = self.bulk.lattice.get_cartesian_coords(mol_center_frac)
             # Generate periodic images
-            for da in range(-2, 3):
-                for db in range(-2, 3):
-                    for dc in range(-2, 3):
+            for da in image_ranges[0]:
+                for db in image_ranges[1]:
+                    for dc in image_ranges[2]:
                         shift = (
                             da * self.bulk.lattice.matrix[0]
                             + db * self.bulk.lattice.matrix[1]
                             + dc * self.bulk.lattice.matrix[2]
                         )
-                        image_center = mol_center_cart + shift
+                        image_center = R_bulk2slab @ (mol_center_cart + shift) + t_bulk2slab
                         bulk_mol_images.append((mol_idx, image_center, mol_idx))
 
         # Match each slab fragment to the closest bulk molecule image
@@ -632,16 +640,11 @@ class MoleculeRepair:
                 and center_z <= fw_max - self.margin
             )
 
-            if not well_inside:
-                # Surface molecule - remove it
-                removed += 1
-                continue
-
             # Check if we have all atoms (or close to it)
             expected_size = len(self.molecules[mol_idx])
             actual_size = len(all_slab_atoms)
 
-            if actual_size >= expected_size * 0.8:
+            if well_inside and actual_size >= expected_size * 0.8:
                 # Keep all fragment atoms (molecule is mostly intact)
                 for idx in all_slab_atoms:
                     new_sp.append(str(slab[idx].specie))
@@ -651,7 +654,9 @@ class MoleculeRepair:
                     placed_positions.append(new_cc[-1])
                 kept += 1
             else:
-                # Reconstruct from template
+                # Reconstruct from template.  This includes matched surface
+                # fragments: preserving molecules means completing the
+                # molecule in the selected image, not leaving boundary pieces.
                 tmpl = self._templates[mol_idx]
 
                 # Save position before adding atoms
@@ -725,6 +730,14 @@ class MoleculeRepair:
         structure: PmgStructure, indices: List[int], cutoff: float = 1.6,
     ) -> List[List[int]]:
         """Cluster atoms by pairwise distance connectivity."""
+        def _pbc_distance(i: int, j: int) -> float:
+            delta = np.asarray(structure.frac_coords[i]) - np.asarray(
+                structure.frac_coords[j]
+            )
+            delta -= np.round(delta)
+            cart_delta = structure.lattice.get_cartesian_coords(delta)
+            return float(np.linalg.norm(cart_delta))
+
         visited: Set[int] = set()
         clusters: List[List[int]] = []
         for idx in indices:
@@ -740,7 +753,7 @@ class MoleculeRepair:
                 cluster.append(cur)
                 for other in indices:
                     if other not in visited:
-                        dist = structure.get_distance(cur, other)
+                        dist = _pbc_distance(cur, other)
                         if dist < cutoff:
                             queue.append(other)
             clusters.append(cluster)
@@ -749,40 +762,11 @@ class MoleculeRepair:
     @staticmethod
     def _pbc_center(structure: PmgStructure, indices: List[int]) -> np.ndarray:
         """PBC-aware geometric center (fractional coords)."""
-        coords = structure.frac_coords[indices].copy()
-        ref = coords[0]
-        for j in range(3):
-            diff = coords[:, j] - ref[j]
-            coords[:, j] = ref[j] + (diff + 0.5) % 1.0 - 0.5
-        return coords.mean(axis=0) % 1.0
+        return pbc_center(structure, indices)
 
     def _build_mol_templates(self) -> List[Dict]:
         """Extract Cartesian offset templates for each detected molecule."""
-        templates = []
-        for mol in self.molecules:
-            center_cart = self.bulk.lattice.get_cartesian_coords(
-                self._pbc_center(self.bulk, mol)
-            )
-            offsets = []
-            species = []
-            for idx in mol:
-                cart = self.bulk.lattice.get_cartesian_coords(
-                    self.bulk.frac_coords[idx]
-                )
-                d = cart - center_cart
-                for j in range(3):
-                    ll = self.bulk.lattice.abc[j]
-                    if d[j] > ll / 2:
-                        d[j] -= ll
-                    elif d[j] < -ll / 2:
-                        d[j] += ll
-                offsets.append(d)
-                species.append(str(self.bulk[idx].specie))
-            templates.append({
-                "offsets": np.array(offsets),
-                "species": species,
-            })
-        return templates
+        return build_molecule_templates(self.bulk, self.molecules)
 
     @staticmethod
     def _compute_rmsd(P: np.ndarray, Q: np.ndarray) -> float:
@@ -1010,6 +994,7 @@ class MoleculeRepair:
             slab.lattice.alpha, slab.lattice.beta, slab.lattice.gamma,
         )
         new_frac = new_lat.get_fractional_coords(new_cc_arr) % 1.0
+        new_frac[np.isclose(new_frac, 1.0, atol=1e-8)] = 0.0
 
         z_ord = np.argsort(new_frac[:, 2])
         final = _get_pymatgen_types()["PmgStructure"](
@@ -1096,7 +1081,15 @@ class SurfaceBuilder(Operation):
         from mckit.io.reader import read_structure
         from pymatgen.io.ase import AseAtomsAdaptor
 
-        return AseAtomsAdaptor().get_structure(read_structure(path))
+        bulk = AseAtomsAdaptor().get_structure(read_structure(path))
+        PmgStructure = _get_pymatgen_types()["PmgStructure"]
+        return PmgStructure(
+            bulk.lattice,
+            [site.species for site in bulk],
+            bulk.frac_coords % 1.0,
+            site_properties=bulk.site_properties,
+            coords_are_cartesian=False,
+        )
 
     # ------------------------------------------------------------------
     # Termination discovery
@@ -1186,7 +1179,6 @@ class SurfaceBuilder(Operation):
                 )
                 repaired, _ = repair.repair(slab_pm)
                 slab_atoms = AseAtomsAdaptor().get_atoms(repaired)
-                slab_atoms.set_pbc([True, True, False])
 
             # Determine output path
             out_path = self._resolve_output_path(
@@ -1441,7 +1433,6 @@ def cmd_build_slab(args) -> None:
             )
             repaired, report = repair.repair(slab_pm)
             slab_atoms = AseAtomsAdaptor().get_atoms(repaired)
-            slab_atoms.set_pbc([True, True, False])
             path = write_atoms(output, slab_atoms)
 
             # Check symmetry of repaired slab
