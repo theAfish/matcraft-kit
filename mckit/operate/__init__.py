@@ -16,6 +16,10 @@ __all__ = [
     "VacancyCreator",
     "MoleculeDetector",
     "MoleculeRepair",
+    "LayerInfo",
+    "StackMatch",
+    "VdWStackBuilder",
+    "VdWStackResult",
 ]
 
 
@@ -42,4 +46,7 @@ def __getattr__(name):
     if name == "MoleculeDetector":
         from mckit.operate.molecule_utils import MoleculeDetector
         return MoleculeDetector
+    if name in ("LayerInfo", "StackMatch", "VdWStackBuilder", "VdWStackResult"):
+        from mckit.operate import vdw_stack
+        return getattr(vdw_stack, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
