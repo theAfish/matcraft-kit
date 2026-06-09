@@ -4,6 +4,7 @@ from ase import Atoms
 
 from mckit.core.structure import Structure
 from mckit.operate import VdWStackBuilder
+from mckit.operate.vdw_stack import _MatchCandidate
 
 
 def graphite():
@@ -126,3 +127,65 @@ def test_thirty_degree_match_does_not_collapse_cell():
     assert builder.last_result.matches[0].actual_angle == pytest.approx(30.0)
     assert area > 250.0
     assert minimum_distance > 1.0
+
+
+def test_joint_search_can_reconsider_the_first_pair(monkeypatch):
+    def candidate(cell, angle):
+        return _MatchCandidate(
+            match=object(),
+            angle=angle,
+            strain=0.0,
+            layer_cell=cell,
+            stack_cell=cell,
+            deformation=np.eye(2),
+        )
+
+    def fake_candidates(
+        stack_vectors,
+        layer_vectors,
+        requested_angle,
+        max_area,
+        max_length_tol,
+        max_angle_tol,
+        max_strain,
+        limit,
+    ):
+        area = abs(np.linalg.det(stack_vectors))
+        if requested_angle == 10.0:
+            values = [
+                candidate(np.diag([2.0, 2.0]), 10.0),
+                candidate(np.diag([3.0, 3.0]), 11.0),
+            ]
+        elif area < 5.0:
+            values = [candidate(np.diag([2.0, 2.0]), 50.0)]
+        else:
+            values = [candidate(np.diag([3.0, 3.0]), 20.0)]
+        return values[:limit]
+
+    monkeypatch.setattr(
+        VdWStackBuilder,
+        "_match_layer_candidates",
+        staticmethod(fake_candidates),
+    )
+    layers = [
+        Atoms("H", cell=np.diag([1.0, 1.0, 10.0]), pbc=True)
+        for _ in range(3)
+    ]
+    common = dict(
+        max_area=100.0,
+        max_length_tol=0.03,
+        max_angle_tol=0.01,
+        max_strain=0.05,
+        strain_mode="both",
+        matches_per_step=2,
+    )
+    greedy = VdWStackBuilder._plan_stack(
+        layers, [0.0, 10.0, 20.0], search_width=1, **common,
+    )
+    joint = VdWStackBuilder._plan_stack(
+        layers, [0.0, 10.0, 20.0], search_width=2, **common,
+    )
+
+    assert greedy.score[0] == pytest.approx(30.0)
+    assert joint.score[0] == pytest.approx(1.0)
+    assert joint.steps[0].candidate.angle == pytest.approx(11.0)

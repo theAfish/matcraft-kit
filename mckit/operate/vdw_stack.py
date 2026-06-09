@@ -55,6 +55,42 @@ class VdWStackResult:
     matches: List[StackMatch] = field(default_factory=list)
 
 
+@dataclass
+class _MatchCandidate:
+    match: object
+    angle: float
+    strain: float
+    layer_cell: np.ndarray
+    stack_cell: np.ndarray
+    deformation: np.ndarray
+
+
+@dataclass
+class _StackStep:
+    candidate: _MatchCandidate
+    target: np.ndarray
+    layer_deformation: np.ndarray
+    stack_deformation: np.ndarray
+
+
+@dataclass
+class _SearchState:
+    cell: np.ndarray
+    steps: List[_StackStep]
+    angle_errors: List[float]
+    strains: List[float]
+
+    @property
+    def score(self) -> Tuple[float, float, float, float, float]:
+        return (
+            max(self.angle_errors, default=0.0),
+            sum(self.angle_errors),
+            max(self.strains, default=0.0),
+            sum(self.strains),
+            float(abs(np.linalg.det(self.cell))),
+        )
+
+
 def _rotation_from_to(source: np.ndarray, target: np.ndarray) -> np.ndarray:
     """Return a proper row-vector rotation mapping source onto target."""
     source = source / np.linalg.norm(source)
@@ -352,26 +388,25 @@ class VdWStackBuilder(Operation):
         return layer, info
 
     @staticmethod
-    def _match_layer(
-        stack: Atoms,
-        layer: Atoms,
+    def _match_layer_candidates(
+        stack_vectors: np.ndarray,
+        layer_vectors: np.ndarray,
         requested_angle: float,
         max_area: float,
         max_length_tol: float,
         max_angle_tol: float,
         max_strain: float,
-    ):
+        limit: int,
+    ) -> List[_MatchCandidate]:
         from pymatgen.analysis.interfaces.zsl import ZSLGenerator
 
-        stack_vectors = np.asarray(stack.cell)[:2]
-        layer_vectors = np.asarray(layer.cell)[:2]
         generator = ZSLGenerator(
             max_area=max_area,
             max_length_tol=max_length_tol,
             max_angle_tol=max_angle_tol,
             bidirectional=True,
         )
-        best = None
+        candidates = []
         for match in generator(layer_vectors, stack_vectors):
             layer_sl, stack_sl, deformation, angle, strain = _best_basis_mapping(
                 np.asarray(match.film_sl_vectors)[:, :2],
@@ -382,22 +417,172 @@ class VdWStackBuilder(Operation):
             if strain > max_strain:
                 continue
             score = (error, strain, float(match.match_area))
-            if best is None or score < best[0]:
-                best = (
-                    score,
-                    match,
-                    angle,
-                    strain,
-                    layer_sl,
-                    stack_sl,
-                    deformation,
-                )
-        if best is None:
+            candidates.append((
+                score,
+                _MatchCandidate(
+                    match=match,
+                    angle=angle,
+                    strain=strain,
+                    layer_cell=layer_sl,
+                    stack_cell=stack_sl,
+                    deformation=deformation,
+                ),
+            ))
+        if not candidates:
+            return []
+
+        # ZSL can emit several symmetry-equivalent representations of the
+        # same solution. Keep distinct cells so the beam is spent on genuinely
+        # different paths.
+        unique = []
+        seen = set()
+        for _, candidate in sorted(candidates, key=lambda item: item[0]):
+            key = (
+                round(candidate.angle, 8),
+                tuple(np.round(candidate.stack_cell, 7).ravel()),
+                tuple(np.round(candidate.layer_cell, 7).ravel()),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(candidate)
+            if len(unique) >= limit:
+                break
+        return unique
+
+    @classmethod
+    def _match_layer(
+        cls,
+        stack: Atoms,
+        layer: Atoms,
+        requested_angle: float,
+        max_area: float,
+        max_length_tol: float,
+        max_angle_tol: float,
+        max_strain: float,
+    ):
+        candidates = cls._match_layer_candidates(
+            np.asarray(stack.cell)[:2],
+            np.asarray(layer.cell)[:2],
+            requested_angle,
+            max_area,
+            max_length_tol,
+            max_angle_tol,
+            max_strain,
+            limit=1,
+        )
+        if not candidates:
             raise ValueError(
                 "No commensurate lattice match met the area/strain limits. "
                 "Increase --max-area or --max-strain."
             )
-        return best[1:]
+        candidate = candidates[0]
+        return (
+            candidate.match,
+            candidate.angle,
+            candidate.strain,
+            candidate.layer_cell,
+            candidate.stack_cell,
+            candidate.deformation,
+        )
+
+    @staticmethod
+    def _partition_strain(
+        candidate: _MatchCandidate,
+        strain_mode: str,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        from scipy.linalg import polar
+
+        rotation, stretch = polar(candidate.deformation)
+        if strain_mode == "both":
+            eigenvalues, eigenvectors = np.linalg.eigh(stretch)
+            stretch_half = (
+                eigenvectors @ np.diag(np.sqrt(eigenvalues)) @ eigenvectors.T
+            )
+            layer_deformation = rotation @ stretch_half
+            stack_deformation = np.linalg.inv(stretch_half)
+            target = candidate.layer_cell @ layer_deformation
+        elif strain_mode == "stack":
+            layer_deformation = np.eye(2)
+            stack_deformation = np.linalg.inv(candidate.deformation)
+            target = candidate.layer_cell
+        else:
+            layer_deformation = candidate.deformation
+            stack_deformation = np.eye(2)
+            target = candidate.stack_cell
+        return target, layer_deformation, stack_deformation
+
+    @classmethod
+    def _plan_stack(
+        cls,
+        layers: Sequence[Atoms],
+        angles: Sequence[float],
+        *,
+        max_area: float,
+        max_length_tol: float,
+        max_angle_tol: float,
+        max_strain: float,
+        strain_mode: str,
+        search_width: int,
+        matches_per_step: int,
+    ) -> _SearchState:
+        """Beam-search complete N-layer commensurate-cell paths."""
+        states = [_SearchState(
+            cell=np.asarray(layers[0].cell)[:2, :2].copy(),
+            steps=[],
+            angle_errors=[],
+            strains=[],
+        )]
+        for index, layer in enumerate(layers[1:], start=1):
+            expanded = []
+            layer_vectors = np.asarray(layer.cell)[:2]
+            for state in states:
+                candidates = cls._match_layer_candidates(
+                    state.cell,
+                    layer_vectors,
+                    angles[index],
+                    max_area,
+                    max_length_tol,
+                    max_angle_tol,
+                    max_strain,
+                    limit=matches_per_step,
+                )
+                for candidate in candidates:
+                    target, layer_deformation, stack_deformation = (
+                        cls._partition_strain(candidate, strain_mode)
+                    )
+                    expanded.append(_SearchState(
+                        cell=target,
+                        steps=state.steps + [_StackStep(
+                            candidate=candidate,
+                            target=target,
+                            layer_deformation=layer_deformation,
+                            stack_deformation=stack_deformation,
+                        )],
+                        angle_errors=state.angle_errors + [
+                            _angle_distance(candidate.angle, angles[index])
+                        ],
+                        strains=state.strains + [candidate.strain],
+                    ))
+            if not expanded:
+                raise ValueError(
+                    f"No joint commensurate solution remained while adding layer "
+                    f"{index + 1}. Increase --max-area, --max-strain, "
+                    "or --search-width."
+                )
+
+            distinct = []
+            seen = set()
+            for state in sorted(expanded, key=lambda value: value.score):
+                key = tuple(np.round(state.cell, 7).ravel())
+                if key in seen:
+                    continue
+                seen.add(key)
+                distinct.append(state)
+                if len(distinct) >= search_width:
+                    break
+            states = distinct
+        return min(states, key=lambda value: value.score)
 
     @staticmethod
     def _integer_transform(transform) -> np.ndarray:
@@ -464,6 +649,8 @@ class VdWStackBuilder(Operation):
         max_strain: float = 0.05,
         bond_scale: float = 1.15,
         strain_mode: str = "both",
+        search_width: int = 8,
+        matches_per_step: int = 8,
     ) -> Structure:
         """Build an N-layer commensurate van der Waals stack.
 
@@ -478,6 +665,8 @@ class VdWStackBuilder(Operation):
             raise ValueError("gap must be positive and vacuum must be non-negative.")
         if strain_mode not in {"both", "stack", "layer"}:
             raise ValueError("strain_mode must be 'both', 'stack', or 'layer'.")
+        if search_width < 1 or matches_per_step < 1:
+            raise ValueError("search_width and matches_per_step must be positive.")
 
         if angles is None:
             normalized_angles = [0.0] * len(structures)
@@ -509,63 +698,53 @@ class VdWStackBuilder(Operation):
             layers.append(layer)
             layer_info.append(info)
 
+        plan = self._plan_stack(
+            layers,
+            normalized_angles,
+            max_area=max_area,
+            max_length_tol=max_length_tol,
+            max_angle_tol=max_angle_tol,
+            max_strain=max_strain,
+            strain_mode=strain_mode,
+            search_width=search_width,
+            matches_per_step=matches_per_step,
+        )
+
         stack = layers[0]
         stack.positions[:, 2] -= stack.positions[:, 2].min()
         matches = []
-        for index, layer in enumerate(layers[1:], start=1):
-            (
-                match,
-                actual_angle,
-                strain,
-                layer_cell,
-                stack_cell,
-                deformation,
-            ) = self._match_layer(
-                stack,
-                layer,
-                normalized_angles[index],
-                max_area,
-                max_length_tol,
-                max_angle_tol,
-                max_strain,
-            )
+        for index, (layer, step) in enumerate(
+            zip(layers[1:], plan.steps), start=1,
+        ):
+            candidate = step.candidate
+            match = candidate.match
             stack_transform = self._integer_transform(match.substrate_transformation)
             layer_transform = self._integer_transform(match.film_transformation)
             stack_super = make_supercell(stack, stack_transform)
             layer_super = make_supercell(layer, layer_transform)
 
-            from scipy.linalg import polar
-            rotation, stretch = polar(deformation)
-            if strain_mode == "both":
-                eigenvalues, eigenvectors = np.linalg.eigh(stretch)
-                stretch_half = (
-                    eigenvectors @ np.diag(np.sqrt(eigenvalues)) @ eigenvectors.T
-                )
-                layer_deformation = rotation @ stretch_half
-                stack_deformation = np.linalg.inv(stretch_half)
-                target = layer_cell @ layer_deformation
-            elif strain_mode == "stack":
-                layer_deformation = np.eye(2)
-                stack_deformation = np.linalg.inv(deformation)
-                target = layer_cell
-            else:
-                layer_deformation = deformation
-                stack_deformation = np.eye(2)
-                target = stack_cell
             stack_super = self._map_supercell(
-                stack_super, stack_cell, target, stack_deformation,
+                stack_super,
+                candidate.stack_cell,
+                step.target,
+                step.stack_deformation,
             )
             layer_super = self._map_supercell(
-                layer_super, layer_cell, target, layer_deformation,
+                layer_super,
+                candidate.layer_cell,
+                step.target,
+                step.layer_deformation,
             )
             stack = self._join(stack_super, layer_super, gap, vacuum=0.0)
             matches.append(StackMatch(
                 layer_index=index,
                 requested_angle=normalized_angles[index],
-                actual_angle=actual_angle,
-                angle_error=_angle_distance(actual_angle, normalized_angles[index]),
-                area=float(abs(np.linalg.det(target))),
-                max_strain=strain,
+                actual_angle=candidate.angle,
+                angle_error=_angle_distance(
+                    candidate.angle, normalized_angles[index],
+                ),
+                area=float(abs(np.linalg.det(step.target))),
+                max_strain=candidate.strain,
                 layer_transform=layer_transform[:2, :2],
                 stack_transform=stack_transform[:2, :2],
             ))
@@ -599,6 +778,8 @@ def _cmd_build(args) -> None:
         max_strain=args.max_strain,
         bond_scale=args.bond_scale,
         strain_mode=args.strain_mode,
+        search_width=args.search_width,
+        matches_per_step=args.matches_per_step,
     )
     output = args.output
     if not output:
@@ -642,6 +823,14 @@ def register_cli(subparsers) -> None:
     parser.add_argument(
         "--strain-mode", choices=["both", "stack", "layer"], default="both",
         help="Which side absorbs mismatch: both, existing stack, or incoming layer",
+    )
+    parser.add_argument(
+        "--search-width", type=int, default=8,
+        help="Number of partial multilayer solutions retained during joint search",
+    )
+    parser.add_argument(
+        "--matches-per-step", type=int, default=8,
+        help="Commensurate matches explored per layer and partial solution",
     )
     parser.add_argument("--output", "-o")
     parser.set_defaults(handler=_cmd_build)
