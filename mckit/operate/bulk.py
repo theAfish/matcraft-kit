@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
+from ase import Atoms
 from ase.build import bulk as ase_bulk
 
-from mckit.core.structure import Structure
+from mckit.core.conversion import to_ase_atoms, to_pymatgen_structure
 from mckit.core.tool import Operation
 
 
@@ -43,7 +44,7 @@ class BulkBuilder(Operation):
         c: Optional[float] = None,
         conventional_unit_cell: bool = True,
         **extra,
-    ) -> Structure:
+    ) -> Atoms:
         """Build a bulk structure.
 
         Parameters
@@ -83,14 +84,13 @@ class BulkBuilder(Operation):
             kwargs["c"] = c
 
         atoms = ase_bulk(name, **kwargs)
-        structure = Structure.from_ase_atoms(atoms)
         if conventional_unit_cell:
             from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-            analyzer = SpacegroupAnalyzer(structure.to_pymatgen())
-            structure = Structure.from_pymatgen(
-                analyzer.get_conventional_standard_structure()
+            analyzer = SpacegroupAnalyzer(to_pymatgen_structure(atoms))
+            atoms = to_ase_atoms(
+                analyzer.get_conventional_standard_structure(),
             )
-        return structure
+        return atoms
 
     @staticmethod
     def _normalize_element_symbol(value) -> str:
@@ -121,10 +121,10 @@ def _cmd_build(args):
     if args.c is not None:
         kwargs["c"] = args.c
 
-    structure = builder.apply(**kwargs)
+    atoms = builder.apply(**kwargs)
     output = args.output or f"bulk_{args.type}.extxyz"
-    path = write_atoms(output, structure.atoms)
-    print(f"Built {args.type} -> {path}  ({len(structure.atoms)} atoms)")
+    path = write_atoms(output, atoms)
+    print(f"Built {args.type} -> {path}  ({len(atoms)} atoms)")
 
 
 def register_cli(subparsers) -> None:

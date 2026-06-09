@@ -7,7 +7,6 @@ from typing import Optional, Sequence
 import numpy as np
 
 from mckit.core.conversion import StructureLike, to_ase_atoms
-from mckit.core.structure import Structure
 from mckit.core.tool import Operation
 
 # ---------------------------------------------------------------------------
@@ -167,15 +166,14 @@ class PerturbationBuilder(Operation):
         cell_magnitude: Optional[float] = None,
         cell_mode: str = "tri",
         seed: Optional[int] = None,
-    ) -> Structure:
+    ) -> Atoms:
         """Apply random displacements to atomic positions and/or cell vectors.
 
         Parameters
         ----------
         structure :
             Input structure.  Accepts :class:`ase.Atoms`,
-            :class:`pymatgen.core.structure.Structure`, or
-            :class:`mmkit.core.structure.Structure`.
+            :class:`pymatgen.core.structure.Structure`.
         magnitude :
             Maximum displacement in angstroms (default ``0.1``).
             For ``"gaussian"`` mode this is the standard deviation.
@@ -212,8 +210,8 @@ class PerturbationBuilder(Operation):
 
         Returns
         -------
-        mmkit.core.structure.Structure
-            A new structure with displaced atomic positions and/or cell vectors.
+        ase.Atoms
+            New atoms with displaced positions and/or cell vectors.
         """
         atoms = to_ase_atoms(structure)
 
@@ -253,7 +251,7 @@ class PerturbationBuilder(Operation):
             perturbed_cell = _perturb_cell(atoms.cell, cell_magnitude, cell_mode, rng)
             atoms.set_cell(perturbed_cell, scale_atoms=True)
 
-        return Structure(atoms=atoms)
+        return atoms
 
 
 # ---------------------------------------------------------------------------
@@ -297,15 +295,14 @@ class BatchPerturbationBuilder(Operation):
         cell_magnitude: Optional[float] = None,
         cell_mode: str = "tri",
         seed: Optional[int] = None,
-    ) -> list[Structure]:
+    ) -> list[Atoms]:
         """Generate a batch of perturbed structures.
 
         Parameters
         ----------
         structure :
             Input structure.  Accepts :class:`ase.Atoms`,
-            :class:`pymatgen.core.structure.Structure`, or
-            :class:`mmkit.core.structure.Structure`.
+            :class:`pymatgen.core.structure.Structure`.
         num_structures :
             Number of perturbed copies to generate (default ``10``).
         magnitude :
@@ -327,7 +324,7 @@ class BatchPerturbationBuilder(Operation):
 
         Returns
         -------
-        list[mmkit.core.structure.Structure]
+        list[ase.Atoms]
             A list of perturbed structures, one per requested copy.
         """
         atoms = to_ase_atoms(structure)
@@ -356,7 +353,7 @@ class BatchPerturbationBuilder(Operation):
                         f"with {n_atoms} atoms"
                     )
 
-        results: list[Structure] = []
+        results: list[Atoms] = []
         for i in range(num_structures):
             child_seed = None if seed is None else seed + i
             rng = np.random.default_rng(child_seed)
@@ -374,7 +371,7 @@ class BatchPerturbationBuilder(Operation):
                 perturbed_cell = _perturb_cell(perturbed.cell, cell_magnitude, cell_mode, rng)
                 perturbed.set_cell(perturbed_cell, scale_atoms=True)
 
-            results.append(Structure(atoms=perturbed))
+            results.append(perturbed)
 
         return results
 
@@ -404,7 +401,7 @@ def _cmd_perturb(args):
 
     stem = Path(args.input).stem
     output = args.output or f"perturbed_{stem}.extxyz"
-    path = write_structure(output, result.atoms)
+    path = write_structure(output, result)
 
     cell_info = f", cell={args.cell_magnitude}" if args.cell_magnitude is not None else ""
     print(
@@ -437,7 +434,7 @@ def _cmd_batch(args):
     prefix = args.output or f"perturbed_{stem}"
     paths: list[str] = []
     for i, struct in enumerate(results):
-        path = write_structure(f"{prefix}_{i:04d}.extxyz", struct.atoms)
+        path = write_structure(f"{prefix}_{i:04d}.extxyz", struct)
         paths.append(path)
 
     cell_info = f", cell={args.cell_magnitude}" if args.cell_magnitude is not None else ""

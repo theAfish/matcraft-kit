@@ -27,7 +27,7 @@ import numpy as np
 from ase import Atoms
 from ase.build import surface as ase_surface
 
-from mckit.core.structure import Structure
+from mckit.core.conversion import StructureLike, to_pymatgen_structure
 from mckit.core.tool import Operation
 from mckit.operate.molecule_utils import MoleculeDetector, build_molecule_templates, pbc_center
 from mckit.io.writer import write_atoms
@@ -989,12 +989,14 @@ class SurfaceBuilder(Operation):
     # ------------------------------------------------------------------
     def find_terminations(
         self,
-        bulk: str | Structure,
+        bulk: str | StructureLike,
         miller: Tuple[int, int, int],
     ) -> List[Termination]:
         """Load a bulk file and discover all terminations."""
         if isinstance(bulk, str):
             bulk = self.load_bulk(bulk)
+        else:
+            bulk = to_pymatgen_structure(bulk, copy=False)
         analyzer = TerminationAnalyzer(
             bulk=bulk,
             miller=miller,
@@ -1009,7 +1011,7 @@ class SurfaceBuilder(Operation):
     # ------------------------------------------------------------------
     def build_slab(
         self,
-        bulk: str | Structure,
+        bulk: str | StructureLike,
         miller: Tuple[int, int, int],
         termination: str | int = 0,
         output: Optional[str] = None,
@@ -1034,6 +1036,8 @@ class SurfaceBuilder(Operation):
         """
         if isinstance(bulk, str):
             bulk = self.load_bulk(bulk)
+        else:
+            bulk = to_pymatgen_structure(bulk, copy=False)
         analyzer = TerminationAnalyzer(
             bulk=bulk,
             miller=miller,
@@ -1091,18 +1095,18 @@ class SurfaceBuilder(Operation):
     def apply(
         self,
         *,
-        bulk: str | Structure,
+        bulk: str | StructureLike,
         miller: Tuple[int, int, int] = (0, 0, 1),
         termination: str | int = 0,
         **_,
-    ) -> Structure:
+    ) -> Atoms:
         """Build a slab (Operation interface).
 
         For programmatic use.  For CLI, use ``find_terminations`` /
         ``build_slab`` directly.
         """
         slab_atoms, _path = self.build_slab(bulk, miller, termination)
-        return Structure.from_ase_atoms(slab_atoms)
+        return slab_atoms
 
     # ------------------------------------------------------------------
     # Private helpers

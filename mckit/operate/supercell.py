@@ -8,7 +8,6 @@ import numpy as np
 from ase.build import make_supercell
 
 from mckit.core.conversion import StructureLike, to_ase_atoms
-from mckit.core.structure import Structure
 from mckit.core.tool import Operation
 
 # ---------------------------------------------------------------------------
@@ -77,15 +76,14 @@ class SupercellBuilder(Operation):
         *,
         structure: StructureLike,
         repeat: Sequence[int] | Sequence[Sequence[int]],
-    ) -> Structure:
+    ) -> Atoms:
         """Build a supercell.
 
         Parameters
         ----------
         structure :
             Input structure.  Accepts :class:`ase.Atoms`,
-            :class:`pymatgen.core.structure.Structure`, or
-            :class:`mmkit.core.structure.Structure`.
+            :class:`pymatgen.core.structure.Structure`.
         repeat :
             Either a 3-element list ``[n1, n2, n3]`` for a diagonal
             repeat, or a 3×3 nested list for an arbitrary supercell
@@ -93,13 +91,13 @@ class SupercellBuilder(Operation):
 
         Returns
         -------
-        mmkit.core.structure.Structure
-            The supercell structure.
+        ase.Atoms
+            The supercell.
         """
         atoms = to_ase_atoms(structure)
         matrix = _normalise_repeat(repeat)
         supercell_atoms = make_supercell(atoms, matrix)
-        return Structure(atoms=supercell_atoms)
+        return supercell_atoms
 
 
 # ---------------------------------------------------------------------------
@@ -128,10 +126,10 @@ def _cmd_build(args):
 
     stem = Path(args.input).stem
     output = args.output or f"supercell_{stem}.extxyz"
-    path = write_atoms(output, result.atoms)
+    path = write_atoms(output, result)
     print(
-        f"Supercell: {len(atoms)} -> {len(result.atoms)} atoms  "
-        f"({result.lattice.volume:.2f} A^3)  -> {path}"
+        f"Supercell: {len(atoms)} -> {len(result)} atoms  "
+        f"({result.cell.volume:.2f} A^3)  -> {path}"
     )
 
 

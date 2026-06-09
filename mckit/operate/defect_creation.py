@@ -36,7 +36,6 @@ import numpy as np
 from ase import Atoms
 
 from mckit.core.conversion import StructureLike, to_pymatgen_structure
-from mckit.core.structure import Structure
 from mckit.core.tool import Operation
 
 
@@ -96,7 +95,7 @@ class _DefectCreator(Operation):
 
     Subclasses provide a :meth:`_generate_defects` method that returns a
     list of pymatgen defect objects.  :meth:`apply` selects one by *index*
-    and returns the modified structure as an mmkit :class:`Structure`.
+    and returns the modified structure as :class:`ase.Atoms`.
     """
 
     # -- public API ---------------------------------------------------------
@@ -112,7 +111,7 @@ class _DefectCreator(Operation):
         return [d.name for d in defects]
 
     def apply(self, *, structure: StructureLike, index: int = 0,
-              **kwargs) -> Structure:
+              **kwargs) -> Atoms:
         """Create a single point defect and return the result.
 
         Parameters
@@ -141,7 +140,7 @@ class _DefectCreator(Operation):
             )
 
         selected = defects[index]
-        return Structure(atoms=_defect_to_atoms(selected))
+        return _defect_to_atoms(selected)
 
     @abstractmethod
     def _generate_defects(self, pmg_structure, **kwargs):
@@ -233,7 +232,7 @@ class SubstitutionCreator(_DefectCreator):
 
     def apply(self, *, structure: StructureLike,
               substitution: dict[str, Union[str, list[str]]],
-              index: int = 0) -> Structure:
+              index: int = 0) -> Atoms:
         """Create a substitution defect.
 
         Parameters
@@ -385,7 +384,7 @@ class InterstitialCreator(_DefectCreator):
 
     def apply(self, *, structure: StructureLike,
               species: Union[str, list[str]],
-              index: int = 0) -> Structure:
+              index: int = 0) -> Atoms:
         """Create an interstitial defect.
 
         Parameters
@@ -444,8 +443,6 @@ def _resolve_input(path_or_atoms) -> Atoms:
         return read_structure(path_or_atoms)
     if isinstance(path_or_atoms, Atoms):
         return path_or_atoms
-    if isinstance(path_or_atoms, Structure):
-        return path_or_atoms.to_ase_atoms()
     raise TypeError(f"Cannot resolve input of type {type(path_or_atoms)}")
 
 
@@ -560,7 +557,7 @@ def _cmd_create_defect(creator, args, extra_kwargs=None):
         selected_names.append(names[index])
         current_atoms = creator.apply(
             structure=current_atoms, index=index, **kwargs,
-        ).atoms
+        )
 
     if not selected_names:
         raise ValueError("No defects could be generated for the provided input.")
@@ -846,9 +843,9 @@ def _cmd_enumerate(args):
     defect_name = names[args.index]
     safe_name = defect_name.replace("/", "_")
     output = args.output or f"{stem}_{safe_name}.extxyz"
-    path = write_atoms(output, result.atoms)
+    path = write_atoms(output, result)
     print(f"Created defect [{args.index}] {defect_name}")
-    print(f"  {len(atoms)} -> {len(result.atoms)} atoms  -> {path}")
+    print(f"  {len(atoms)} -> {len(result)} atoms  -> {path}")
 
 
 def _cmd_populate(args):

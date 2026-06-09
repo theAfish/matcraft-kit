@@ -16,9 +16,11 @@ from dataclasses import dataclass, field
 from typing import List, Tuple
 
 import numpy as np
+from ase import Atoms
 
-from mckit.core.structure import Structure
 from mckit.core.tool import Observation
+
+_AMU_PER_A3_TO_G_PER_CM3 = 1.66053906660
 
 
 @dataclass
@@ -57,7 +59,7 @@ class FundamentalCheck(Observation):
         self.min_dist = min_dist
         self.density_bounds = density_bounds
 
-    def observe(self, structure: Structure, **kwargs) -> CheckResult:
+    def observe(self, structure: Atoms, **kwargs) -> CheckResult:
         result = CheckResult(passed=True)
         self._check_overlaps(structure, result.errors)
         self._check_bounds(structure, result.warnings)
@@ -66,36 +68,38 @@ class FundamentalCheck(Observation):
         return result
 
     # ------------------------------------------------------------------
-    def _check_overlaps(self, struct: Structure, errors: List[str]) -> None:
-        atoms = struct.atoms
-        n = len(atoms)
+    def _check_overlaps(self, struct: Atoms, errors: List[str]) -> None:
+        n = len(struct)
         if n < 2:
             return
-        d = atoms.get_all_distances(mic=True)
+        d = struct.get_all_distances(mic=True)
         iu, ju = np.triu_indices(n, k=1)
         mask = d[iu, ju] < self.min_dist
-        symbols = atoms.get_chemical_symbols()
+        symbols = struct.get_chemical_symbols()
         for i, j in zip(iu[mask], ju[mask]):
             errors.append(
                 f"Overlap: atom {i} ({symbols[i]}) and atom {j} ({symbols[j]}) "
                 f"are {d[i, j]:.4f} A apart."
             )
 
-    def _check_bounds(self, struct: Structure, warnings: List[str]) -> None:
+    def _check_bounds(self, struct: Atoms, warnings: List[str]) -> None:
         eps = 1e-6
-        frac = struct.positions
+        frac = struct.get_scaled_positions(wrap=False)
         out = np.any((frac < -eps) | (frac > 1.0 + eps), axis=1)
         if not out.any():
             return
-        symbols = struct.symbols
+        symbols = struct.get_chemical_symbols()
         for i in np.nonzero(out)[0]:
             warnings.append(
                 f"Atom {i} ({symbols[i]}) has fractional coords {frac[i]} "
-                "outside [0, 1). Use structure.wrap_to_cell()."
+                "outside [0, 1). Use atoms.wrap()."
             )
 
-    def _check_density(self, struct: Structure, warnings: List[str]) -> None:
-        d = struct.density
+    def _check_density(self, struct: Atoms, warnings: List[str]) -> None:
+        volume = float(struct.cell.volume)
+        if volume < 1e-10:
+            return
+        d = float(struct.get_masses().sum()) * _AMU_PER_A3_TO_G_PER_CM3 / volume
         lo, hi = self.density_bounds
         if not (lo <= d <= hi):
             warnings.append(
@@ -112,16 +116,13 @@ def _cmd_check(args):
     import json
     import sys
     from mckit.io import read_structure
-    from mckit.core.structure import Structure
-
     atoms = read_structure(args.input)
-    structure = Structure.from_ase_atoms(atoms)
 
     checker = FundamentalCheck(
         min_dist=args.min_dist,
         density_bounds=tuple(args.density_bounds),
     )
-    result = checker.observe(structure)
+    result = checker.observe(atoms)
 
     if args.json:
         import dataclasses

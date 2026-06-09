@@ -9,15 +9,16 @@ Two main subsystems:
   - observations: tools that INSPECT structures (info, checks, properties, ...)
 """
 
+from ase import Atoms
+
 from mckit.core.lattice import Lattice
-from mckit.core.structure import Structure
 from mckit.core.tool import Operation, Observation
 from mckit.io import read_structure, write_structure
 
 __version__ = "0.2.0"
 __all__ = [
     "Lattice",
-    "Structure",
+    "Atoms",
     "Operation",
     "Observation",
     "read_structure",

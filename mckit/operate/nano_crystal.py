@@ -13,7 +13,6 @@ import numpy as np
 from ase import Atoms
 
 from mckit.core.conversion import StructureLike, to_ase_atoms
-from mckit.core.structure import Structure
 from mckit.core.tool import Operation
 
 _SHAPE_ALIASES = {
@@ -166,7 +165,7 @@ class NanoCrystalBuilder(Operation):
         expand_symmetry: bool = True,
         symprec: float = 1e-3,
         tolerance: float = 1e-8,
-    ) -> Structure:
+    ) -> Atoms:
         """Build and return a nonperiodic nanocrystal."""
         atoms = to_ase_atoms(structure)
         if len(atoms) == 0:
@@ -297,7 +296,7 @@ class NanoCrystalBuilder(Operation):
                 "nanocrystal_vacuum": float(vacuum),
             }
         )
-        return Structure(atoms=cluster)
+        return cluster
 
 
 def _parse_facets(values: Sequence[Sequence[str]]) -> tuple[list[list[int]], list[float]]:

@@ -25,7 +25,6 @@ import numpy as np
 from ase import Atoms
 from ase.build import molecule as ase_molecule
 
-from mckit.core.structure import Structure
 from mckit.core.tool import Operation
 
 
@@ -44,7 +43,7 @@ class ASEMoleculeBuilder(Operation):
     >>> ASEMoleculeBuilder().apply(name="H2O")
     """
 
-    def apply(self, *, name: str) -> Structure:
+    def apply(self, *, name: str) -> Atoms:
         """Build a molecule by name from the ASE database.
 
         Parameters
@@ -55,7 +54,7 @@ class ASEMoleculeBuilder(Operation):
         """
         atoms = ase_molecule(name)
         atoms.pbc = False
-        return Structure.from_ase_atoms(atoms)
+        return atoms
 
 
 class SMILESMoleculeBuilder(Operation):
@@ -76,7 +75,7 @@ class SMILESMoleculeBuilder(Operation):
         smiles: str,
         optimize: bool = True,
         vacuum: float = 5.0,
-    ) -> Structure:
+    ) -> Atoms:
         """Generate a 3-D molecular structure from a SMILES string.
 
         Parameters
@@ -135,7 +134,7 @@ class SMILESMoleculeBuilder(Operation):
         # Center and add vacuum padding
         atoms.center(vacuum=vacuum)
 
-        return Structure.from_ase_atoms(atoms)
+        return atoms
 
 
 
@@ -180,10 +179,10 @@ def _cmd_from_ase(args):
     from mckit.io import write_atoms
 
     builder = ASEMoleculeBuilder()
-    structure = builder.apply(name=args.name)
+    atoms = builder.apply(name=args.name)
     output = args.output or f"mol_{args.name}.extxyz"
-    path = write_atoms(output, structure.atoms)
-    print(f"Built molecule {args.name!r} -> {path}  ({len(structure.atoms)} atoms)")
+    path = write_atoms(output, atoms)
+    print(f"Built molecule {args.name!r} -> {path}  ({len(atoms)} atoms)")
 
 
 def _cmd_from_smiles(args):
@@ -194,16 +193,16 @@ def _cmd_from_smiles(args):
     kwargs = dict(smiles=args.smiles, vacuum=args.vacuum)
     if args.no_optimize:
         kwargs["optimize"] = False
-    structure = builder.apply(**kwargs)
+    atoms = builder.apply(**kwargs)
 
     # Derive a filename from the SMILES (first 20 chars, sanitized)
     safe_name = "".join(
         c if c.isalnum() else "_" for c in args.smiles[:20]
     )
     output = args.output or f"mol_{safe_name}.extxyz"
-    path = write_atoms(output, structure.atoms)
+    path = write_atoms(output, atoms)
     print(f"Built molecule from SMILES {args.smiles!r} -> {path}  "
-          f"({len(structure.atoms)} atoms)")
+          f"({len(atoms)} atoms)")
 
 
 
@@ -241,4 +240,3 @@ def register_cli(subparsers) -> None:
                           help="Skip MMFF force-field optimisation")
     p_smiles.add_argument("-o", "--output", help="Output file (default: mol_<smiles>.extxyz)")
     p_smiles.set_defaults(handler=_cmd_from_smiles)
-

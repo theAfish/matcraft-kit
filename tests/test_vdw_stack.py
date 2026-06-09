@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from mckit.core.structure import Structure
 from mckit.operate import VdWStackBuilder
 from mckit.operate.vdw_stack import _MatchCandidate
 
@@ -80,9 +79,9 @@ def test_builds_commensurate_graphene_bilayer_with_requested_gap():
         max_area=50.0,
     )
 
-    assert isinstance(result, Structure)
+    assert isinstance(result, Atoms)
     assert len(result) == 4
-    z_planes = np.unique(np.round(result.cart_positions[:, 2], decimals=6))
+    z_planes = np.unique(np.round(result.positions[:, 2], decimals=6))
     assert len(z_planes) == 2
     assert z_planes[1] - z_planes[0] == pytest.approx(3.35)
     assert builder.last_result.matches[0].actual_angle == pytest.approx(0.0)
@@ -119,9 +118,9 @@ def test_thirty_degree_match_does_not_collapse_cell():
     )
 
     area = np.linalg.norm(np.cross(
-        result.lattice.matrix[0], result.lattice.matrix[1],
+        result.cell.array[0], result.cell.array[1],
     ))
-    distances = result.atoms.get_all_distances(mic=True)
+    distances = result.get_all_distances(mic=True)
     minimum_distance = distances[np.triu_indices(len(result), 1)].min()
 
     assert builder.last_result.matches[0].actual_angle == pytest.approx(30.0)

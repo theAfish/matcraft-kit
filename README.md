@@ -68,7 +68,6 @@ mckit/
 ├── __init__.py              # Package root — exports public API
 ├── core/
 │   ├── lattice.py           # Lattice dataclass (3×3 matrix, ASE Cell-backed)
-│   ├── structure.py         # Structure dataclass (lattice + species + positions)
 │   └── tool.py              # Abstract base classes: Operation, Observation
 ├── operate/
 │   ├── bulk.py              # BulkBuilder — standard crystal structures
@@ -85,7 +84,7 @@ mckit/
 
 The framework follows an **Operation / Observation** pattern:
 
-- **`Operation`** (abstract) — tools that **build or modify** structures. Subclasses implement `apply(...)` and return a `Structure`.
+- **`Operation`** (abstract) — tools that **build or modify** structures. Subclasses implement `apply(...)` and return `ase.Atoms`.
 - **`Observation`** (abstract) — tools that **inspect** structures without modifying them. Subclasses implement `observe(structure) → Any`.
 
 Both are single-method ABCs defined in `mckit.core.tool`, making it straightforward to add new operations or observations.
@@ -93,7 +92,7 @@ Both are single-method ABCs defined in `mckit.core.tool`, making it straightforw
 **Core data flow:**
 
 ```
-File (CIF, VASP, ...) ──read_structure()──▶ ase.Atoms ──Operation──▶ Structure/ase.Atoms ──write_structure()──▶ File
+File (CIF, VASP, ...) ──read_structure()──▶ ase.Atoms ──Operation──▶ ase.Atoms ──write_structure()──▶ File
                                                 │
                                                 └──Observation──▶ dict / CheckResult / ...
 ```
@@ -115,13 +114,13 @@ pytest --cov=mckit --cov-report=term-missing
 Create a file under `mckit/operate/` and subclass `Operation`:
 
 ```python
-from mckit.core.structure import Structure
+from ase import Atoms
 from mckit.core.tool import Operation
 
 class MyBuilder(Operation):
     """Build or modify a structure."""
 
-    def apply(self, *, some_param: float, **kwargs) -> Structure:
+    def apply(self, *, some_param: float, **kwargs) -> Atoms:
         # ... your logic here ...
         return new_structure
 ```
@@ -133,13 +132,13 @@ Then re-export it from `mckit/operate/__init__.py`.
 Create a file under `mckit/observe/` and subclass `Observation`:
 
 ```python
-from mckit.core.structure import Structure
+from ase import Atoms
 from mckit.core.tool import Observation
 
 class MyAnalysis(Observation):
     """Inspect a structure and return results."""
 
-    def observe(self, structure: Structure, **kwargs):
+    def observe(self, structure: Atoms, **kwargs):
         # ... your logic here ...
         return result_dict
 ```

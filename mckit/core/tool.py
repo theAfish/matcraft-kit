@@ -2,10 +2,10 @@
 
 Two families:
 
-* ``Operation``  — *builds* or *modifies* a ``Structure``. Subclasses define
+* ``Operation``  — *builds* or *modifies* an ``ase.Atoms``. Subclasses define
   ``apply(...)`` with whatever signature makes sense (no fixed contract on
-  arguments — the only requirement is that it returns a ``Structure``).
-* ``Observation`` — *inspects* a ``Structure`` and returns arbitrary data
+  arguments — the only requirement is that it returns ``ase.Atoms``).
+* ``Observation`` — *inspects* ``ase.Atoms`` and returns arbitrary data
   without modifying it. Subclasses implement ``observe(structure, **kwargs)``.
 
 Adding a new tool is a one-class affair — see the examples in
@@ -17,17 +17,17 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from mckit.core.structure import Structure
+from ase import Atoms
 
 
 class Operation(ABC):
     """Base class for structure-building / modifying tools."""
 
     @abstractmethod
-    def apply(self, *args, **kwargs) -> Structure:
-        """Run the operation and return the resulting ``Structure``."""
+    def apply(self, *args, **kwargs) -> Atoms:
+        """Run the operation and return the resulting atoms."""
 
-    def __call__(self, *args, **kwargs) -> Structure:
+    def __call__(self, *args, **kwargs) -> Atoms:
         return self.apply(*args, **kwargs)
 
     def __repr__(self) -> str:
@@ -38,10 +38,10 @@ class Observation(ABC):
     """Base class for structure-inspection tools."""
 
     @abstractmethod
-    def observe(self, structure: Structure, **kwargs) -> Any:
+    def observe(self, structure: Atoms, **kwargs) -> Any:
         """Inspect the structure and return arbitrary result data."""
 
-    def __call__(self, structure: Structure, **kwargs) -> Any:
+    def __call__(self, structure: Atoms, **kwargs) -> Any:
         return self.observe(structure, **kwargs)
 
     def __repr__(self) -> str:

@@ -19,9 +19,19 @@ from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from ase import Atoms
 
-from mckit.core.structure import Structure
+from mckit.core.conversion import to_pymatgen_structure
 from mckit.core.tool import Observation
+
+_AMU_PER_A3_TO_G_PER_CM3 = 1.66053906660
+
+
+def _density(atoms: Atoms) -> Optional[float]:
+    volume = float(atoms.cell.volume)
+    if volume < 1e-10:
+        return None
+    return float(atoms.get_masses().sum()) * _AMU_PER_A3_TO_G_PER_CM3 / volume
 
 
 # ---------------------------------------------------------------------------
@@ -39,13 +49,13 @@ class InfoSection(ABC):
     key: str = ""
 
     @abstractmethod
-    def observe(self, structure: Structure) -> Dict[str, Any]:
+    def observe(self, structure: Atoms) -> Dict[str, Any]:
         """Return a dict of information for *structure*."""
 
     def print_section(
         self,
         info: Dict[str, Any],
-        structure: Structure,
+        structure: Atoms,
         all_info: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Pretty-print this section.  *info* is the dict from :meth:`observe`."""
@@ -63,8 +73,8 @@ class BasicInfo(InfoSection):
 
     key = "basic"
 
-    def observe(self, structure: Structure) -> Dict[str, Any]:
-        atoms = structure.atoms
+    def observe(self, structure: Atoms) -> Dict[str, Any]:
+        atoms = structure
         a, b, c, alpha, beta, gamma = atoms.cell.cellpar()
         return {
             "lattice": {
@@ -74,14 +84,14 @@ class BasicInfo(InfoSection):
             "volume": float(atoms.cell.volume),
             "num_atoms": len(atoms),
             "composition": dict(Counter(atoms.get_chemical_symbols())),
-            "density_g_cm3": structure.density,
+            "density_g_cm3": _density(atoms),
             "total_mass_amu": float(atoms.get_masses().sum()),
         }
 
     def print_section(
         self,
         info: Dict[str, Any],
-        structure: Structure,
+        structure: Atoms,
         all_info: Optional[Dict[str, Any]] = None,
     ) -> None:
         has_cell = info["volume"] > 1e-10
@@ -126,7 +136,7 @@ class MoleculeInfo(InfoSection):
             parts.append(elem if count == 1 else f"{elem}{count}")
         return "".join(parts)
 
-    def observe(self, structure: Structure) -> Dict[str, Any]:
+    def observe(self, structure: Atoms) -> Dict[str, Any]:
         try:
             from mckit.operate.molecule_utils import MoleculeDetector, pbc_center
         except ImportError as exc:
@@ -139,7 +149,7 @@ class MoleculeInfo(InfoSection):
             }
 
         try:
-            bulk = structure.to_pymatgen()
+            bulk = to_pymatgen_structure(structure)
             detected = MoleculeDetector(tol=self.tol, min_size=self.min_size).detect(bulk)
         except ImportError as exc:
             return {
@@ -150,7 +160,7 @@ class MoleculeInfo(InfoSection):
                 "types": [],
             }
 
-        symbols = structure.symbols
+        symbols = structure.get_chemical_symbols()
 
         molecules: List[Dict[str, Any]] = []
         type_counts: Counter = Counter()
@@ -191,7 +201,7 @@ class MoleculeInfo(InfoSection):
     def print_section(
         self,
         info: Dict[str, Any],
-        structure: Structure,
+        structure: Atoms,
         all_info: Optional[Dict[str, Any]] = None,
     ) -> None:
         if not info.get("available", True):
@@ -520,9 +530,9 @@ class VacuumInfo(InfoSection):
         self.threshold = threshold
         self._check_dirs = set(directions) if directions else set(_DIRECTION_LABELS)
 
-    def observe(self, structure: Structure) -> Dict[str, Any]:
-        cell = np.asarray(structure.atoms.cell.array)
-        cart_pos = structure.cart_positions
+    def observe(self, structure: Atoms) -> Dict[str, Any]:
+        cell = np.asarray(structure.cell.array)
+        cart_pos = structure.positions
         dir_info = _direction_normals(cell)
 
         directions: Dict[str, Dict[str, Any]] = {}
@@ -573,7 +583,7 @@ class VacuumInfo(InfoSection):
     def print_section(
         self,
         info: Dict[str, Any],
-        structure: Structure,
+        structure: Atoms,
         all_info: Optional[Dict[str, Any]] = None,
     ) -> None:
         # Skip if no vacuum detected (classification shown in BasicInfo)
@@ -635,10 +645,10 @@ class SlabCompositionInfo(InfoSection):
         self.show_bulk_layers = show_bulk_layers
         self._check_dirs = set(directions) if directions else set(_DIRECTION_LABELS)
 
-    def observe(self, structure: Structure) -> Dict[str, Any]:
-        cell = np.asarray(structure.atoms.cell.array)
-        cart_pos = structure.cart_positions
-        symbols = structure.symbols
+    def observe(self, structure: Atoms) -> Dict[str, Any]:
+        cell = np.asarray(structure.cell.array)
+        cart_pos = structure.positions
+        symbols = structure.get_chemical_symbols()
         dir_info = _direction_normals(cell)
 
         result: Dict[str, Any] = {"directions": {}, "has_vacuum": False}
@@ -721,14 +731,14 @@ class SlabCompositionInfo(InfoSection):
     def print_section(
         self,
         info: Dict[str, Any],
-        structure: Structure,
+        structure: Atoms,
         all_info: Optional[Dict[str, Any]] = None,
     ) -> None:
         if not info.get("directions"):
             return
 
         molecule_info = all_info.get("molecules") if all_info else None
-        symbols = structure.symbols
+        symbols = structure.get_chemical_symbols()
 
         for label, dinfo in info["directions"].items():
             if not dinfo.get("has_vacuum", False) and not self.show_bulk_layers:
@@ -821,13 +831,13 @@ class StructureInspect(Observation):
     def __init__(self, sections: Optional[List[InfoSection]] = None) -> None:
         self.sections = list(sections) if sections is not None else list(_DEFAULT_SECTIONS)
 
-    def observe(self, structure: Structure, **kwargs) -> Dict[str, Any]:
+    def observe(self, structure: Atoms, **kwargs) -> Dict[str, Any]:
         result: Dict[str, Any] = {}
         for section in self.sections:
             result[section.key] = section.observe(structure)
         return result
 
-    def print_summary(self, structure: Structure) -> None:
+    def print_summary(self, structure: Atoms) -> None:
         """Pretty-print all sections to stdout."""
         info = self.observe(structure)
         # print("=== Structure Info ===")
@@ -846,13 +856,12 @@ def _cmd_info(args):
     from mckit.io import read_structure
 
     atoms = read_structure(args.input)
-    structure = Structure.from_ase_atoms(atoms)
 
     if args.json:
-        info = StructureInspect().observe(structure)
+        info = StructureInspect().observe(atoms)
         print(json.dumps(info, indent=2, default=str))
     else:
-        StructureInspect().print_summary(structure)
+        StructureInspect().print_summary(atoms)
 
 
 def register_cli(subparsers) -> None:

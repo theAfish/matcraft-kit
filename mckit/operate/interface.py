@@ -556,7 +556,7 @@ class InterfaceBuilder(Operation):
         ----------
         film, substrate
             The film and substrate bulk structures.  Accepts ``ase.Atoms``,
-            ``pymatgen.Structure``, or ``mmkit.Structure``.
+            ``pymatgen.Structure``.
         miller_film, miller_substrate
             Miller indices of the surfaces to expose.
         termination

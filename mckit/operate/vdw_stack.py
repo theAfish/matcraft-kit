@@ -14,7 +14,6 @@ from ase.build import make_supercell
 from ase.neighborlist import natural_cutoffs, neighbor_list
 
 from mckit.core.conversion import StructureLike, to_ase_atoms
-from mckit.core.structure import Structure
 from mckit.core.tool import Operation
 
 
@@ -50,7 +49,7 @@ class StackMatch:
 class VdWStackResult:
     """Stacked structure plus extraction and matching diagnostics."""
 
-    structure: Structure
+    structure: Atoms
     layers: List[LayerInfo] = field(default_factory=list)
     matches: List[StackMatch] = field(default_factory=list)
 
@@ -636,7 +635,7 @@ class VdWStackBuilder(Operation):
         strain_mode: str = "both",
         search_width: int = 8,
         matches_per_step: int = 8,
-    ) -> Structure:
+    ) -> Atoms:
         """Build an N-layer commensurate van der Waals stack.
 
         ``angles`` are absolute in-plane rotations relative to the first layer.
@@ -740,9 +739,8 @@ class VdWStackBuilder(Operation):
         final_cell[2] = [0.0, 0.0, stack.positions[:, 2].max() + vacuum]
         stack.set_cell(final_cell, scale_atoms=False)
         stack.wrap()
-        structure = Structure.from_ase_atoms(stack)
-        self.last_result = VdWStackResult(structure, layer_info, matches)
-        return structure
+        self.last_result = VdWStackResult(stack, layer_info, matches)
+        return stack
 
 
 def _cmd_build(args) -> None:

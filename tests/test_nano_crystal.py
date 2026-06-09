@@ -2,7 +2,6 @@ import numpy as np
 import pytest
 from ase import Atoms
 
-from mckit.core.structure import Structure
 from mckit.operate import NanoCrystalBuilder
 from mckit.cli import build_parser
 from mckit.operate.nano_crystal import _cli_polyhedron_args, _polyhedron_geometry
@@ -17,10 +16,10 @@ def test_sphere_is_finite_centered_cluster():
         structure=simple_cubic(), shape="sphere", size=4.1, vacuum=5.0,
     )
 
-    assert isinstance(result, Structure)
+    assert isinstance(result, Atoms)
     assert len(result) == 7
-    assert not np.any(result.atoms.pbc)
-    assert np.diag(result.atoms.cell.array) == pytest.approx([14.0, 14.0, 14.0])
+    assert not np.any(result.pbc)
+    assert np.diag(result.cell.array) == pytest.approx([14.0, 14.0, 14.0])
 
 
 def test_box_uses_full_dimensions_and_fractional_center():
@@ -33,7 +32,7 @@ def test_box_uses_full_dimensions_and_fractional_center():
     )
 
     assert len(result) == 2
-    assert np.ptp(result.cart_positions, axis=0) == pytest.approx([2.0, 0.0, 0.0])
+    assert np.ptp(result.positions, axis=0) == pytest.approx([2.0, 0.0, 0.0])
 
 
 def test_cylinder_axis_is_a_lattice_direction():
@@ -48,7 +47,7 @@ def test_cylinder_axis_is_a_lattice_direction():
     )
 
     assert len(result) == 3
-    assert np.ptp(result.cart_positions[:, 2]) == pytest.approx(8.0)
+    assert np.ptp(result.positions[:, 2]) == pytest.approx(8.0)
 
 
 def test_miller_faceted_cube():
@@ -61,7 +60,7 @@ def test_miller_faceted_cube():
     )
 
     assert len(result) == 27
-    assert result.composition == {"Cu": 27}
+    assert result.get_chemical_symbols() == ["Cu"] * 27
 
 
 def test_single_cubic_miller_family_expands_to_bounded_polyhedron():
@@ -90,15 +89,15 @@ def test_miller_normals_are_correct_for_skewed_cells():
     assert normals[0] @ direct_vectors[2] == pytest.approx(0.0)
 
 
-def test_accepts_mckit_structure_without_mutating_input():
-    bulk = Structure.from_ase_atoms(simple_cubic())
+def test_does_not_mutate_input_atoms():
+    bulk = simple_cubic()
     result = NanoCrystalBuilder().apply(
         structure=bulk, shape="cube", size=0.5, vacuum=2.0,
     )
 
     assert len(result) == 1
-    assert np.all(bulk.atoms.pbc)
-    assert result.atoms.info["nanocrystal_shape"] == "cube"
+    assert np.all(bulk.pbc)
+    assert result.info["nanocrystal_shape"] == "cube"
 
 
 def test_cli_accepts_explicit_polyhedron_argument_names():

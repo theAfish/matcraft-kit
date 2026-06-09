@@ -16,7 +16,7 @@ def write_structure(
     format: Optional[str] = None,
     **kwargs,
 ) -> str:
-    """Write a ``Structure`` (or raw ``ase.Atoms`` / pymatgen ``Structure``) to a file.
+    """Write ``ase.Atoms`` or a pymatgen ``Structure`` to a file.
 
     The output format is auto-detected from the extension when ``format`` is
     omitted; missing extensions default to ``.extxyz``.
