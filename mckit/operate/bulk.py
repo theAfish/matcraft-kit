@@ -83,12 +83,13 @@ class BulkBuilder(Operation):
             kwargs["c"] = c
 
         atoms = ase_bulk(name, **kwargs)
-        structure = Structure.from_ase_atoms(atoms).to_pymatgen()
+        structure = Structure.from_ase_atoms(atoms)
         if conventional_unit_cell:
             from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-            analyzer = SpacegroupAnalyzer(structure)
-            structure = analyzer.get_conventional_standard_structure()
-            # structure = Structure.from_pymatgen(pmg_conv)
+            analyzer = SpacegroupAnalyzer(structure.to_pymatgen())
+            structure = Structure.from_pymatgen(
+                analyzer.get_conventional_standard_structure()
+            )
         return structure
 
     @staticmethod

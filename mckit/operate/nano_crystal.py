@@ -7,16 +7,14 @@ from functools import reduce
 from itertools import combinations, product
 from math import gcd
 from pathlib import Path
-from typing import Sequence, Union
+from typing import Sequence
 
 import numpy as np
 from ase import Atoms
 
+from mckit.core.conversion import StructureLike, to_ase_atoms
 from mckit.core.structure import Structure
 from mckit.core.tool import Operation
-
-
-StructureLike = Union[Atoms, Structure, "PmgStructure"]
 
 _SHAPE_ALIASES = {
     "sphere": "sphere",
@@ -31,28 +29,6 @@ _SHAPE_ALIASES = {
     "polyhedron": "polyhedron",
     "faceted": "polyhedron",
 }
-
-
-def _to_ase_atoms(obj: StructureLike) -> Atoms:
-    """Return a copy of a supported structure as ``ase.Atoms``."""
-    if isinstance(obj, Structure):
-        return obj.to_ase_atoms()
-    if isinstance(obj, Atoms):
-        return obj.copy()
-
-    try:
-        from pymatgen.core import Structure as PmgStructure
-        from pymatgen.io.ase import AseAtomsAdaptor
-
-        if isinstance(obj, PmgStructure):
-            return AseAtomsAdaptor().get_atoms(obj)
-    except ImportError:
-        pass
-
-    raise TypeError(
-        "Expected ase.Atoms, pymatgen Structure, or mckit Structure; "
-        f"got {type(obj).__name__}."
-    )
 
 
 def _positive_values(
@@ -192,7 +168,7 @@ class NanoCrystalBuilder(Operation):
         tolerance: float = 1e-8,
     ) -> Structure:
         """Build and return a nonperiodic nanocrystal."""
-        atoms = _to_ase_atoms(structure)
+        atoms = to_ase_atoms(structure)
         if len(atoms) == 0:
             raise ValueError("The input bulk structure contains no atoms.")
         if not np.all(atoms.pbc):

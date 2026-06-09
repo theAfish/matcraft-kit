@@ -6,18 +6,18 @@ import argparse
 import itertools
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 from ase import Atoms
 from ase.build import make_supercell
 from ase.neighborlist import natural_cutoffs, neighbor_list
 
+from mckit.core.conversion import StructureLike, to_ase_atoms
 from mckit.core.structure import Structure
 from mckit.core.tool import Operation
 
 
-StructureLike = Union[Atoms, Structure, "PmgStructure"]
 
 
 @dataclass
@@ -192,21 +192,6 @@ class VdWStackBuilder(Operation):
         self.last_result: Optional[VdWStackResult] = None
 
     @staticmethod
-    def _to_atoms(obj: StructureLike) -> Atoms:
-        if isinstance(obj, Atoms):
-            return obj.copy()
-        if isinstance(obj, Structure):
-            return obj.to_ase_atoms()
-        try:
-            from pymatgen.io.ase import AseAtomsAdaptor
-            return AseAtomsAdaptor().get_atoms(obj)
-        except (TypeError, AttributeError) as exc:
-            raise TypeError(
-                "Expected ase.Atoms, mckit Structure, or pymatgen Structure; "
-                f"got {type(obj).__name__}"
-            ) from exc
-
-    @staticmethod
     def _bond_graph(atoms: Atoms, bond_scale: float):
         cutoffs = natural_cutoffs(atoms, mult=bond_scale)
         i_idx, j_idx, shifts = neighbor_list("ijS", atoms, cutoffs)
@@ -338,7 +323,7 @@ class VdWStackBuilder(Operation):
         max_thickness_ratio: Optional[float] = None,
     ) -> Tuple[Atoms, LayerInfo]:
         """Extract and normalize one covalently connected 2D component."""
-        atoms = self._to_atoms(structure)
+        atoms = to_ase_atoms(structure)
         if len(atoms) == 0 or atoms.cell.rank < 3:
             raise ValueError("Layer extraction requires a non-empty 3D periodic cell.")
         atoms.pbc = True

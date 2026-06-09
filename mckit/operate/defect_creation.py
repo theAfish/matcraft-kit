@@ -30,21 +30,17 @@ from __future__ import annotations
 
 from abc import abstractmethod
 import random
-from typing import TYPE_CHECKING, Union
+from typing import Union
 import numpy as np
 
 from ase import Atoms
 
+from mckit.core.conversion import StructureLike, to_pymatgen_structure
 from mckit.core.structure import Structure
 from mckit.core.tool import Operation
 
-if TYPE_CHECKING:
-    from pymatgen.core.structure import Structure as PmgStructure
-else:
-    PmgStructure = object
 
 # Type alias for flexible structure input
-StructureLike = Union[Atoms, Structure, PmgStructure]
 
 
 # ---------------------------------------------------------------------------
@@ -76,32 +72,6 @@ def _get_defect_generators():
         SubstitutionGenerator,
         AntiSiteGenerator,
         VoronoiInterstitialGenerator,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Input coercion
-# ---------------------------------------------------------------------------
-
-def _to_pmg_structure(obj: StructureLike):
-    """Coerce various structure types to a pymatgen ``Structure``."""
-    if isinstance(obj, Structure):
-        return obj.to_pymatgen()
-
-    if isinstance(obj, Atoms):
-        from pymatgen.io.ase import AseAtomsAdaptor
-        return AseAtomsAdaptor().get_structure(obj)
-
-    try:
-        PmgStructure = _get_pymatgen_types()
-        if isinstance(obj, PmgStructure):
-            return obj.copy()
-    except ImportError:
-        pass
-
-    raise TypeError(
-        f"Expected Atoms, pymatgen Structure, or mmkit Structure, "
-        f"got {type(obj).__name__}"
     )
 
 
@@ -137,7 +107,7 @@ class _DefectCreator(Operation):
         Use this before calling :meth:`apply` to decide which ``index``
         to pass.
         """
-        pmg = _to_pmg_structure(structure)
+        pmg = to_pymatgen_structure(structure)
         defects = self._generate_defects(pmg, **kwargs)
         return [d.name for d in defects]
 
@@ -155,7 +125,7 @@ class _DefectCreator(Operation):
         **kwargs :
             Subclass-specific parameters (e.g. *substitution*, *species*).
         """
-        pmg = _to_pmg_structure(structure)
+        pmg = to_pymatgen_structure(structure)
         defects = self._generate_defects(pmg, **kwargs)
 
         if not defects:
@@ -292,7 +262,7 @@ class SubstitutionCreator(_DefectCreator):
         substitution :
             Mapping of host element to dopant element(s).
         """
-        pmg = _to_pmg_structure(structure)
+        pmg = to_pymatgen_structure(structure)
         defects = self._generate_defects(pmg, substitution=substitution)
         return [d.name for d in defects]
 
@@ -442,7 +412,7 @@ class InterstitialCreator(_DefectCreator):
         species :
             Element symbol(s) to consider inserting.
         """
-        pmg = _to_pmg_structure(structure)
+        pmg = to_pymatgen_structure(structure)
         defects = self._generate_defects(pmg, species=species)
         return [d.name for d in defects]
 

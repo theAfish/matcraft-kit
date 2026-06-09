@@ -2,55 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence, Union
+from typing import Optional, Sequence
 
 import numpy as np
-from ase import Atoms
 
+from mckit.core.conversion import StructureLike, to_ase_atoms
 from mckit.core.structure import Structure
 from mckit.core.tool import Operation
-
-# Type alias for structure-like inputs
-StructureLike = Union[Atoms, Structure, "PmgStructure"]
-
-# ---------------------------------------------------------------------------
-# Lazy pymatgen import helper
-# ---------------------------------------------------------------------------
-
-def _get_pymatgen_types():
-    """Import pymatgen types lazily so the module loads without pymatgen."""
-    from pymatgen.core.structure import Structure as PmgStructure
-    return PmgStructure
-
-
-# ---------------------------------------------------------------------------
-# Input coercion
-# ---------------------------------------------------------------------------
-
-def _to_ase_atoms(obj: StructureLike) -> Atoms:
-    """Coerce various structure types to ``ase.Atoms``."""
-    # mmkit Structure
-    if isinstance(obj, Structure):
-        return obj.to_ase_atoms()
-
-    # Already ASE Atoms
-    if isinstance(obj, Atoms):
-        return obj.copy()
-
-    # pymatgen Structure (check by name to avoid hard import)
-    try:
-        PmgStructure = _get_pymatgen_types()
-        if isinstance(obj, PmgStructure):
-            from pymatgen.io.ase import AseAtomsAdaptor
-            return AseAtomsAdaptor().get_atoms(obj)
-    except ImportError:
-        pass
-
-    raise TypeError(
-        f"Expected Atoms, pymatgen Structure, or mmkit Structure, "
-        f"got {type(obj).__name__}"
-    )
-
 
 # ---------------------------------------------------------------------------
 # Perturbation modes
@@ -257,7 +215,7 @@ class PerturbationBuilder(Operation):
         mmkit.core.structure.Structure
             A new structure with displaced atomic positions and/or cell vectors.
         """
-        atoms = _to_ase_atoms(structure)
+        atoms = to_ase_atoms(structure)
 
         # Validate mode early
         if mode not in _PERTURBATION_MODES:
@@ -372,7 +330,7 @@ class BatchPerturbationBuilder(Operation):
         list[mmkit.core.structure.Structure]
             A list of perturbed structures, one per requested copy.
         """
-        atoms = _to_ase_atoms(structure)
+        atoms = to_ase_atoms(structure)
 
         if mode not in _PERTURBATION_MODES:
             raise ValueError(

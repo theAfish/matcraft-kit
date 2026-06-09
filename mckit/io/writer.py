@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional
 
-from ase import Atoms
 from ase.io import write as ase_write
 
-from mckit.core.structure import Structure
+from mckit.core.conversion import StructureLike, to_ase_atoms
 
 
 def write_structure(
     path: str,
-    structure: Union[Structure, Atoms, "PmgStructure"],
+    structure: StructureLike,
     format: Optional[str] = None,
     **kwargs,
 ) -> str:
@@ -22,14 +21,7 @@ def write_structure(
     The output format is auto-detected from the extension when ``format`` is
     omitted; missing extensions default to ``.extxyz``.
     """
-    if isinstance(structure, Structure):
-        atoms = structure.to_ase_atoms()
-    elif isinstance(structure, Atoms):
-        atoms = structure
-    else:
-        # Assume pymatgen Structure (or compatible)
-        from pymatgen.io.ase import AseAtomsAdaptor
-        atoms = AseAtomsAdaptor().get_atoms(structure)
+    atoms = to_ase_atoms(structure, copy=False)
     p = Path(path)
     if p.suffix == "":
         p = p.with_suffix(".extxyz")

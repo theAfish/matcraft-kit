@@ -2,56 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Sequence, Union
+from typing import Sequence
 
 import numpy as np
-from ase import Atoms
 from ase.build import make_supercell
 
+from mckit.core.conversion import StructureLike, to_ase_atoms
 from mckit.core.structure import Structure
 from mckit.core.tool import Operation
-
-# Type alias for structure-like inputs
-StructureLike = Union[Atoms, Structure, "PmgStructure"]
-
-# ---------------------------------------------------------------------------
-# Lazy pymatgen import helper
-# ---------------------------------------------------------------------------
-
-def _get_pymatgen_types():
-    """Import pymatgen types lazily so the module loads without pymatgen."""
-    from pymatgen.core.structure import Structure as PmgStructure
-    return PmgStructure
-
-
-# ---------------------------------------------------------------------------
-# Input coercion
-# ---------------------------------------------------------------------------
-
-def _to_ase_atoms(obj: StructureLike) -> Atoms:
-    """Coerce various structure types to ``ase.Atoms``."""
-    # mmkit Structure
-    if isinstance(obj, Structure):
-        return obj.to_ase_atoms()
-
-    # Already ASE Atoms
-    if isinstance(obj, Atoms):
-        return obj.copy()
-
-    # pymatgen Structure (check by name to avoid hard import)
-    try:
-        PmgStructure = _get_pymatgen_types()
-        if isinstance(obj, PmgStructure):
-            from pymatgen.io.ase import AseAtomsAdaptor
-            return AseAtomsAdaptor().get_atoms(obj)
-    except ImportError:
-        pass
-
-    raise TypeError(
-        f"Expected Atoms, pymatgen Structure, or mmkit Structure, "
-        f"got {type(obj).__name__}"
-    )
-
 
 # ---------------------------------------------------------------------------
 # Repeat normalisation
@@ -138,7 +96,7 @@ class SupercellBuilder(Operation):
         mmkit.core.structure.Structure
             The supercell structure.
         """
-        atoms = _to_ase_atoms(structure)
+        atoms = to_ase_atoms(structure)
         matrix = _normalise_repeat(repeat)
         supercell_atoms = make_supercell(atoms, matrix)
         return Structure(atoms=supercell_atoms)

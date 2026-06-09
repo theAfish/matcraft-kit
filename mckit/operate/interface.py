@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from ase import Atoms
 
-from mckit.core.structure import Structure
+from mckit.core.conversion import StructureLike, to_pymatgen_structure
 from mckit.core.tool import Operation
 from mckit.operate.molecule_utils import (
     MoleculeDetector,
@@ -430,8 +430,8 @@ class InterfaceBuilder(Operation):
     def list_terminations(
         self,
         *,
-        film: Union[Atoms, PmgStructure, Structure],
-        substrate: Union[Atoms, PmgStructure, Structure],
+        film: StructureLike,
+        substrate: StructureLike,
         miller_film: Tuple[int, int, int] = (1, 0, 0),
         miller_substrate: Tuple[int, int, int] = (1, 1, 1),
         max_area: Optional[float] = 400.0,
@@ -478,8 +478,8 @@ class InterfaceBuilder(Operation):
             ``substrate_miller``, ``von_mises_strain``, ``match_area``,
             ``terminations`` (list of :class:`InterfaceTermination`).
         """
-        film_pmg = self._to_pymatgen(film)
-        substrate_pmg = self._to_pymatgen(substrate)
+        film_pmg = to_pymatgen_structure(film)
+        substrate_pmg = to_pymatgen_structure(substrate)
 
         build_film, _, _ = self._prepare_bulk(
             film_pmg, preserve_molecules, mol_tol, mol_min_size,
@@ -531,8 +531,8 @@ class InterfaceBuilder(Operation):
     def apply(
         self,
         *,
-        film: Union[Atoms, PmgStructure, Structure],
-        substrate: Union[Atoms, PmgStructure, Structure],
+        film: StructureLike,
+        substrate: StructureLike,
         miller_film: Tuple[int, int, int] = (1, 0, 0),
         miller_substrate: Tuple[int, int, int] = (1, 1, 1),
         termination=0,
@@ -590,8 +590,8 @@ class InterfaceBuilder(Operation):
         mol_min_size
             Minimum atoms to count as a molecule.
         """
-        film_pmg = self._to_pymatgen(film)
-        substrate_pmg = self._to_pymatgen(substrate)
+        film_pmg = to_pymatgen_structure(film)
+        substrate_pmg = to_pymatgen_structure(substrate)
 
         # ---- Molecule detection + pseudo-atom replacement ---------------
         build_film, film_molecules, film_templates = self._prepare_bulk(
@@ -848,25 +848,6 @@ class InterfaceBuilder(Operation):
             f"substrate={sub_target!r}. "
             f"Available pairs: {terminations}"
         )
-
-    @staticmethod
-    def _to_pymatgen(obj: Union[Atoms, PmgStructure, Structure]) -> PmgStructure:
-        """Coerce various structure types to pymatgen Structure."""
-        pmg_types = _get_pymatgen_types()
-        PmgStructure = pmg_types["PmgStructure"]
-        AseAtomsAdaptor = pmg_types["AseAtomsAdaptor"]
-
-        if isinstance(obj, PmgStructure):
-            return obj
-        if isinstance(obj, Structure):
-            return obj.to_pymatgen()
-        if isinstance(obj, Atoms):
-            return AseAtomsAdaptor().get_structure(obj)
-        raise TypeError(
-            f"Expected Atoms, pymatgen Structure, or mmkit Structure, "
-            f"got {type(obj).__name__}"
-        )
-
 
 # ---------------------------------------------------------------------------
 # CLI
