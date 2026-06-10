@@ -13,7 +13,8 @@ dependencies = [
     "ase>=3.22",
     "pymatgen>=2022.0.0",
     "pymatgen-analysis-defects>=2024.10.22",
-    "rdkit>=2025.9.6"
+    "rdkit>=2025.9.6",
+    "packmol>=21.0.0"
 ]
 
 [project.optional-dependencies]
@@ -21,5 +22,4 @@ dev = ["pytest", "pytest-cov"]
 
 [project.scripts]
 mckit = "mckit.cli:main"
-
 

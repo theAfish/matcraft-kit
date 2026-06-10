@@ -1,6 +1,7 @@
 """Structure-building and modification operations."""
 
 __all__ = [
+    "AdsorptionBuilder",
     "AntiSiteCreator",
     "BatchPerturbationBuilder",
     "BulkBuilder",
@@ -17,6 +18,7 @@ __all__ = [
     "MoleculeDetector",
     "MoleculeRepair",
     "NanoCrystalBuilder",
+    "SolvationBuilder",
     "LayerInfo",
     "StackMatch",
     "VdWStackBuilder",
@@ -26,6 +28,9 @@ __all__ = [
 
 def __getattr__(name):
     """Lazy import to avoid loading heavy dependencies at startup."""
+    if name == "AdsorptionBuilder":
+        from mckit.operate.adsorption import AdsorptionBuilder
+        return AdsorptionBuilder
     if name == "BulkBuilder":
         from mckit.operate.bulk import BulkBuilder
         return BulkBuilder
@@ -50,6 +55,9 @@ def __getattr__(name):
     if name == "NanoCrystalBuilder":
         from mckit.operate.nano_crystal import NanoCrystalBuilder
         return NanoCrystalBuilder
+    if name == "SolvationBuilder":
+        from mckit.operate.solvation import SolvationBuilder
+        return SolvationBuilder
     if name in ("LayerInfo", "StackMatch", "VdWStackBuilder", "VdWStackResult"):
         from mckit.operate import vdw_stack
         return getattr(vdw_stack, name)
