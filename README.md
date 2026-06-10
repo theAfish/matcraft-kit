@@ -145,14 +145,6 @@ class MyAnalysis(Observation):
 
 Then re-export it from `mckit/observe/__init__.py`.
 
-### Building the Package
-
-```bash
-pip install build
-python -m build
-```
-
-This produces a wheel and sdist under `dist/`.
 
 ### Dependencies
 

@@ -11,12 +11,13 @@ Two main subsystems:
 
 from ase import Atoms
 
+from mckit._version import __version__
 from mckit.core.lattice import Lattice
 from mckit.core.tool import Operation, Observation
 from mckit.io import read_structure, write_structure
 
-__version__ = "0.2.0"
 __all__ = [
+    "__version__",
     "Lattice",
     "Atoms",
     "Operation",
