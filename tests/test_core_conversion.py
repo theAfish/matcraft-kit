@@ -45,3 +45,31 @@ def test_bulk_builder_always_returns_atoms(conventional):
 
     assert isinstance(result, Atoms)
     assert result.get_chemical_symbols() == ["Cu"] * (4 if conventional else 1)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected_formula", "expected_atoms"),
+    [
+        (
+            dict(structure_type="fluorite", element="ZrO2", a=5.12),
+            "O8Zr4",
+            12,
+        ),
+        (
+            dict(structure_type="fluorite", elements=["Zr", "O", "O"], a=5.12),
+            "O8Zr4",
+            12,
+        ),
+        (
+            dict(structure_type="fluorite", elements=["zr", "o2"], a=5.12),
+            "O8Zr4",
+            12,
+        ),
+    ],
+)
+def test_bulk_builder_accepts_stoichiometric_inputs(kwargs, expected_formula, expected_atoms):
+    result = BulkBuilder().apply(**kwargs)
+
+    assert isinstance(result, Atoms)
+    assert len(result) == expected_atoms
+    assert result.get_chemical_formula() == expected_formula

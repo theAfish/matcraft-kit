@@ -8,6 +8,7 @@ a thin matmod-flavored wrapper.
 
 from __future__ import annotations
 
+import re
 from typing import Optional, Sequence
 
 from ase import Atoms
@@ -33,6 +34,7 @@ class BulkBuilder(Operation):
         "orthorhombic", "mcl", "diamond", "zincblende", "rocksalt",
         "cesiumchloride", "fluorite", "wurtzite",
     }
+    _FORMULA_PART_RE = re.compile(r"([A-Za-z][a-z]?)(\d*)")
 
     def apply(
         self,
@@ -52,9 +54,10 @@ class BulkBuilder(Operation):
         structure_type
             Any crystal name supported by ``ase.build.bulk``.
         element
-            Single element symbol, e.g. ``"Cu"``.
+            Single element symbol or formula, e.g. ``"Cu"`` or ``"ZrO2"``.
         elements
-            Two element symbols for binary types, e.g. ``["Ga", "As"]``.
+            One or more element symbols, e.g. ``["Ga", "As"]`` or
+            ``["Zr", "O", "O"]``.
         a, c
             Lattice parameters (Å). ``c`` defaults to the ideal value for
             ``hcp`` when omitted.
@@ -69,11 +72,11 @@ class BulkBuilder(Operation):
             )
 
         if elements is not None:
-            if len(elements) != 2:
-                raise ValueError("`elements` must have length 2.")
-            name = "".join(self._normalize_element_symbol(e) for e in elements)
+            if not elements:
+                raise ValueError("`elements` cannot be empty.")
+            name = "".join(self._normalize_formula_part(e) for e in elements)
         elif element is not None:
-            name = self._normalize_element_symbol(element)
+            name = self._normalize_formula(element)
         else:
             raise ValueError("Provide either `element` or `elements`.")
 
@@ -93,15 +96,38 @@ class BulkBuilder(Operation):
         return atoms
 
     @staticmethod
-    def _normalize_element_symbol(value) -> str:
-        """Accept and normalize a non-empty chemical symbol string."""
+    def _normalize_formula_part(value) -> str:
+        """Accept a single formula part, such as ``Cu`` or ``O2``."""
         if isinstance(value, str):
             symbol = value.strip()
         else:
             raise TypeError("Element inputs must be symbol strings like 'Cu'.")
         if not symbol:
             raise ValueError("Element symbol cannot be empty.")
-        return symbol.capitalize()
+        return BulkBuilder._normalize_formula(symbol)
+
+    @classmethod
+    def _normalize_formula(cls, value: str) -> str:
+        """Normalize a chemical symbol or stoichiometric formula for ASE."""
+        if not isinstance(value, str):
+            raise TypeError("Element inputs must be symbol strings like 'Cu'.")
+
+        formula = value.strip()
+        if not formula:
+            raise ValueError("Element symbol cannot be empty.")
+
+        parts = []
+        index = 0
+        for match in cls._FORMULA_PART_RE.finditer(formula):
+            if match.start() != index:
+                raise ValueError(f"Invalid chemical formula {value!r}.")
+            symbol, count = match.groups()
+            parts.append(symbol.capitalize() + count)
+            index = match.end()
+
+        if index != len(formula):
+            raise ValueError(f"Invalid chemical formula {value!r}.")
+        return "".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -135,8 +161,16 @@ def register_cli(subparsers) -> None:
     p = bulk_sub.add_parser("build", help="Build a bulk crystal")
     p.add_argument("--type", required=True, choices=sorted(BulkBuilder.SUPPORTED),
                    help="Crystal structure type")
-    p.add_argument("--element", help="Element symbol, e.g. Cu")
-    p.add_argument("--elements", nargs=2, help="Two element symbols for binary types, e.g. Ga As")
+    species = p.add_mutually_exclusive_group(required=True)
+    species.add_argument(
+        "--element",
+        help="Element symbol or formula, e.g. Cu or ZrO2",
+    )
+    species.add_argument(
+        "--elements",
+        nargs="+",
+        help="One or more element symbols, e.g. Ga As or Zr O O",
+    )
     p.add_argument("--a", type=float, required=True, help="Lattice parameter a (A)")
     p.add_argument("--c", type=float, help="Lattice parameter c (A, hcp only)")
     p.add_argument("--output", "-o", help="Output file (default: bulk_<type>.extxyz)")
