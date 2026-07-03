@@ -9,6 +9,7 @@ __all__ = [
     "InterfaceBuilder",
     "InterfaceTermination",
     "PerturbationBuilder",
+    "PolymerBuilder",
     "SubstitutionCreator",
     "SupercellBuilder",
     "SurfaceBuilder",
@@ -43,6 +44,9 @@ def __getattr__(name):
     if name in ("BatchPerturbationBuilder", "PerturbationBuilder"):
         from mckit.operate import perturbation
         return getattr(perturbation, name)
+    if name == "PolymerBuilder":
+        from mckit.operate.polymer import PolymerBuilder
+        return PolymerBuilder
     if name == "SupercellBuilder":
         from mckit.operate.supercell import SupercellBuilder
         return SupercellBuilder
