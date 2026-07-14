@@ -112,6 +112,20 @@ With coverage:
 pytest --cov=mckit --cov-report=term-missing
 ```
 
+### Building Developer Documentation
+
+The developer documentation is generated from the package docstrings and
+includes all modules, classes, methods, and functions. Install the optional
+documentation dependency, then build the HTML site:
+
+```bash
+pip install -e ".[dev]"
+sphinx-build -b html docs docs/_build/html
+```
+
+Open `docs/_build/html/index.html` in a browser. The source documentation and
+docstring conventions are described in `docs/development.rst`.
+
 ### Adding a New Operation
 
 Create a file under `mckit/operate/` and subclass `Operation`:
