@@ -27,6 +27,9 @@ pip install -e ".[dev]"
 
 ### CLI
 
+For a quick reference with commands, options, and copyable examples for every
+operation and observation, see the [CLI command reference](docs/cli/README.md).
+
 ```bash
 # for observations:
 mckit observe -h
