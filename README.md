@@ -40,8 +40,9 @@ mckit operate -h
 
 - `build` builds short polymer oligomer structures from repeat-unit SMILES.
   Each repeat-unit SMILES must include two polymerization dummy atoms,
-  preferably `[*:1]` and `[*:2]`. The command writes PDB, extxyz, VASP,
-  `manifest.csv`, `manifest.jsonl`, and `run_summary.json`.
+  preferably `[*:1]` and `[*:2]`. The command writes an extxyz structure by
+  default, plus `manifest.csv`, `manifest.jsonl`, and `run_summary.json`.
+  Use `--formats pdb,extxyz,vasp` to request additional structure formats.
 - `detect` inspects an ordinary SMILES and proposes possible two-site
   repeat-unit SMILES by replacing H-bearing heavy-atom sites with `[*:1]`
   and `[*:2]`. This is a heuristic helper for agents/users to choose

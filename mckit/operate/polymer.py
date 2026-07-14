@@ -15,15 +15,15 @@ import time
 from dataclasses import dataclass, field
 from itertools import combinations
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 import numpy as np
 from ase import Atoms
-from ase.io import write as ase_write
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
 from mckit.core.tool import Operation
+from mckit.io import write_structure
 
 
 POLYMER_MODES = (
@@ -929,7 +929,7 @@ def write_records(
     records: Sequence[BuildRecord],
     *,
     out_dir: str | Path,
-    formats: str | Sequence[str] = ("pdb", "extxyz", "vasp"),
+    formats: str | Sequence[str] = ("extxyz",),
 ) -> list[dict[str, Any]]:
     """Write build records and return manifest rows."""
     out_path = Path(out_dir)
@@ -941,15 +941,15 @@ def write_records(
         paths: dict[str, str] = {}
         if "pdb" in selected_formats:
             path = out_path / f"{record.stem}.pdb"
-            ase_write(str(path), record.atoms, format="proteindatabank")
+            write_structure(str(path), record.atoms)
             paths["pdb"] = path.name
         if "extxyz" in selected_formats:
             path = out_path / f"{record.stem}.extxyz"
-            ase_write(str(path), record.atoms, format="extxyz")
+            write_structure(str(path), record.atoms)
             paths["extxyz"] = path.name
         if "vasp" in selected_formats:
             path = out_path / f"{record.stem}.vasp"
-            ase_write(str(path), record.atoms, format="vasp", direct=False)
+            write_structure(str(path), record.atoms, format="vasp", direct=False)
             paths["vasp"] = path.name
 
         row = {
@@ -1005,7 +1005,7 @@ def _cmd_build(args) -> None:
         seed=args.seed,
         vacuum=args.vacuum,
     )
-    manifest_rows = write_records(records, out_dir=out_dir, formats=args.formats)
+    write_records(records, out_dir=out_dir, formats=args.formats)
     summary = {
         "status": "ok",
         "mode": args.mode,
@@ -1018,7 +1018,9 @@ def _cmd_build(args) -> None:
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    print(json.dumps({**summary, "files": manifest_rows}, ensure_ascii=False, indent=2))
+    structure_label = "structure" if len(records) == 1 else "structures"
+    print(f"Built {len(records)} polymer {structure_label} -> {out_dir}")
+    print(f"Manifest: {Path(out_dir) / 'manifest.csv'}")
 
 
 def _write_detect_outputs(result: dict[str, Any], out_dir: str | Path) -> None:
@@ -1066,8 +1068,16 @@ def _cmd_detect(args) -> None:
     )
     if args.out_dir:
         _write_detect_outputs(result, args.out_dir)
-        result = {**result, "output": args.out_dir}
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+        print(
+            f"Detected {result['pair_candidate_count']} candidate connection pairs "
+            f"from {args.smiles!r} -> {args.out_dir}"
+        )
+        print(f"Summary: {Path(args.out_dir) / 'detect_summary.json'}")
+    else:
+        print(
+            f"Detected {result['pair_candidate_count']} candidate connection pairs "
+            f"from {args.smiles!r}"
+        )
 
 
 def register_cli(subparsers) -> None:
@@ -1126,8 +1136,8 @@ def register_cli(subparsers) -> None:
     build.add_argument("--vacuum", type=float, default=8.0, help="Vacuum padding in A.")
     build.add_argument(
         "--formats",
-        default="pdb,extxyz,vasp",
-        help="Comma-separated output formats: pdb,extxyz,vasp.",
+        default="extxyz",
+        help="Comma-separated output formats (default: extxyz): pdb,extxyz,vasp.",
     )
     build.set_defaults(handler=_cmd_build)
 
